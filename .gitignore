@@ -1,0 +1,43 @@
+# Segredos e configuração local
+.rdp-pass
+connect-rdp.sh
+**/config.ini
+**/config.php
+**/mcp.json
+.env
+*.pem
+
+# Artefatos de build e distribuição
+deepseek-chat/build/
+deepseek-chat/bin/
+deepseek-chat/dist/
+deepseek-chat/*.zip
+build/
+*.o
+*.obj
+*.a
+*.exe
+*.dll
+*.dylib
+*.so
+*.app/
+
+# IDE / editores
+.qtcreator/
+*.pro.user
+*.pro.user.*
+.vscode/
+.idea/
+*.autosave
+
+# Sistema
+Thumbs.db
+Desktop.ini
+.DS_Store
+desktop.ini
+
+# Logs e temporários
+*.log
+deepseek-chat.log
+*.tmp
+*.bak

@@ -1,0 +1,44 @@
+<RCC>
+    <qresource prefix="/">
+        <file>resources/deepseek-32.png</file>
+        <file>resources/deepseek-64.png</file>
+        <file>resources/deepseek-128.png</file>
+        <file>resources/deepseek-256.png</file>
+        <file>resources/deepseek-512.png</file>
+        <file>resources/icons/plus.svg</file>
+        <file>resources/icons/chat.svg</file>
+        <file>resources/icons/folder.svg</file>
+        <file>resources/icons/gear.svg</file>
+        <file>resources/icons/list.svg</file>
+        <file>resources/icons/logout.svg</file>
+        <file>resources/icons/paperclip.svg</file>
+        <file>resources/icons/slash.svg</file>
+        <file>resources/icons/send.svg</file>
+        <file>resources/icons/stop.svg</file>
+        <file>resources/icons/trash.svg</file>
+        <file>resources/icons/pencil.svg</file>
+        <file>resources/icons/copy.svg</file>
+        <file>resources/icons/code.svg</file>
+        <file>resources/icons/globe.svg</file>
+        <file>resources/icons/refresh.svg</file>
+        <file>resources/icons/close.svg</file>
+        <file>resources/icons/eye.svg</file>
+        <file>resources/icons/save.svg</file>
+        <file>resources/icons/search.svg</file>
+        <file>resources/icons/image.svg</file>
+        <file>resources/icons/file.svg</file>
+        <file>resources/icons/open.svg</file>
+        <file>resources/icons/mic.svg</file>
+        <file>resources/icons/chart.svg</file>
+        <file>qml/main.qml</file>
+        <file>qml/AppButton.qml</file>
+        <file>qml/LoginView.qml</file>
+        <file>qml/MainView.qml</file>
+        <file>qml/Sidebar.qml</file>
+        <file>qml/ChatView.qml</file>
+        <file>qml/MessageDelegate.qml</file>
+        <file>qml/ProjectView.qml</file>
+        <file>qml/SettingsDialog.qml</file>
+        <file>qml/ActivitiesDialog.qml</file>
+    </qresource>
+</RCC>

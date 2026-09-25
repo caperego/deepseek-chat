@@ -1,0 +1,16 @@
+RewriteEngine On
+RewriteBase /deepseek/
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^ index.php [QSA,L]
+
+<IfModule mod_env.c>
+    SetEnv no-gzip 1
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header set X-Accel-Buffering no
+</IfModule>
+
+<FilesMatch "^(config\.php)$">
+    Require all denied
+</FilesMatch>

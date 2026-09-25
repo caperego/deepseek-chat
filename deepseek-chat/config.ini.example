@@ -1,0 +1,33 @@
+[api]
+base_url=https://web.cap.im/deepseek
+token=
+user_id=0
+username=
+display_name=
+
+[deepseek]
+model=deepseek-flash
+
+[ui]
+theme=light            ; light | dark | system
+font_size=14
+enter_to_send=true
+show_reasoning=true
+permission_mode=ask    ; ask | auto | full (padrão para projetos novos)
+
+[audio]
+tts_enabled=false
+tts_voice=
+tts_rate=0
+stt_enabled=false
+stt_command=whisper-cli -m /caminho/para/modelo.bin -f {file} -l pt -nt
+
+[pricing]
+flash_input_hit=0.003
+flash_input_miss=0.15
+flash_output=0.60
+pro_input_hit=0.022
+pro_input_miss=0.66
+pro_output=1.98
+peak_multiplier=2.0
+peak_enabled=true

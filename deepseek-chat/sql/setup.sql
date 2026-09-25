@@ -1,9 +1,10 @@
 CREATE DATABASE IF NOT EXISTS deepseek_chat
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-GRANT ALL PRIVILEGES ON deepseek_chat.* TO 'caperego'@'192.168.254.0/255.255.255.0';
-GRANT ALL PRIVILEGES ON deepseek_chat.* TO 'caperego'@'177.73.209.0/255.255.255.0';
-GRANT ALL PRIVILEGES ON deepseek_chat.* TO 'caperego'@'localhost';
+-- Ajuste o usuário/rede conforme o seu ambiente (exemplo para uso local):
+GRANT ALL PRIVILEGES ON deepseek_chat.* TO 'usuario'@'localhost';
+-- Para acesso de outros IPs, use, por exemplo:
+-- GRANT ALL PRIVILEGES ON deepseek_chat.* TO 'usuario'@'SEU_IP_LOCAL/255.255.255.255';
 FLUSH PRIVILEGES;
 
 USE deepseek_chat;

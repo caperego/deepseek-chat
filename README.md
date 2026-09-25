@@ -53,7 +53,7 @@ Autor: **Carlos Alberto Perego** — [carlos.pw](https://carlos.pw)
 ```
 ┌────────────────────────────┐        HTTPS/JSON + SSE        ┌──────────────────────────┐
 │  deepseek-chat (Qt 6/QML)  │ ─────────────────────────────▶ │  deepseek-api (PHP)      │
-│  Windows / Linux / macOS   │ ◀───────────────────────────── │  web.cap.im/deepseek     │
+│  Windows / Linux / macOS   │ ◀───────────────────────────── │  SEU_DOMINIO/deepseek     │
 └────────────────────────────┘                                └────────────┬─────────────┘
         │ agent loop (tools locais)                                         │
         ▼                                                                  ▼
@@ -124,7 +124,7 @@ Passo a passo completo (dependências por sistema, áudio, troubleshooting):
 
 ```ini
 [api]
-base_url=https://web.cap.im/deepseek
+base_url=https://SEU_DOMINIO/deepseek
 token=            ; gravado criptografado após o login
 
 [ui]

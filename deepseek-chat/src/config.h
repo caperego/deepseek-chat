@@ -16,7 +16,7 @@ inline QString defaultSttCommand()
 }
 
 struct ApiConfig {
-    QString baseUrl = QStringLiteral("https://web.cap.im/deepseek");
+    QString baseUrl = QStringLiteral("https://SEU_DOMINIO/deepseek");
     QString token;
     qint64 userId = 0;
     QString username;

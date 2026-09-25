@@ -4,7 +4,7 @@ Aplicativo desktop (Qt 6 / QML) para a API DeepSeek, com login, conversas,
 projetos, arquivos, comandos, streaming, ditado/voz opcionais e painel de custos.
 
 A arquitetura é **cliente + backend**: o aplicativo conversa com a **API PHP**
-(em `https://web.cap.im/deepseek`) e o backend guarda a API key do DeepSeek,
+(em `https://SEU_DOMINIO/deepseek`) e o backend guarda a API key do DeepSeek,
 acessa o MariaDB localmente e registra histórico, tokens, custos e atividades.
 O aplicativo nunca vê a chave nem as credenciais do banco — só um **token**.
 
@@ -20,10 +20,10 @@ O projeto está em `deepseek-api/` e o deploy no ISPConfig está documentado em
 
 Resumo:
 
-- Site ISPConfig `web.cap.im` → arquivos em `/web/deepseek`.
+- Site ISPConfig `SEU_DOMINIO` → arquivos em `/web/deepseek`.
 - Banco `deepseek_chat` (usuário `deepseek_api`, local) e tabela `api_tokens`.
 - `config.php` (no servidor) com as credenciais locais + a API key DeepSeek.
-- URL final: `https://web.cap.im/deepseek` (teste: `GET /health`).
+- URL final: `https://SEU_DOMINIO/deepseek` (teste: `GET /health`).
 
 > **Atualização do agente de arquivos:** o projeto do banco precisa da coluna
 > de permissões. No servidor, rode:
@@ -38,7 +38,7 @@ Há um modelo em `config.ini.example`. Principais campos:
 
 ```ini
 [api]
-base_url=https://web.cap.im/deepseek
+base_url=https://SEU_DOMINIO/deepseek
 token=                ; preenchido automaticamente após o login
 user_id=0
 username=
@@ -243,7 +243,7 @@ Observações de macOS:
 
 | Sintoma | Solução |
 |---|---|
-| "Falha ao conectar na API" | Confirme `GET https://web.cap.im/deepseek/health` no navegador/curl |
+| "Falha ao conectar na API" | Confirme `GET https://SEU_DOMINIO/deepseek/health` no navegador/curl |
 | Login "Token inválido ou expirado" | Faça login novamente (o token dura 30 dias) |
 | Sem voz no Linux | Instale `speech-dispatcher espeak-ng` |
 | Microfone não grava no macOS | Autorize em Privacidade e Segurança → Microfone (o app usa o Info.plist) |

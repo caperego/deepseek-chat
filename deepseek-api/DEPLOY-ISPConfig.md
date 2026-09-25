@@ -1,13 +1,13 @@
-# Deploy da API no ISPConfig — https://web.cap.im/deepseek
+# Deploy da API no ISPConfig — https://SEU_DOMINIO/deepseek
 
 A API já foi aplicada no banco (`api_tokens` + usuário `deepseek_api`) e está
 funcionando em teste na `.235` (`php -S 127.0.0.1:8099`).
-Agora falta publicar dentro do site `web.cap.im`.
+Agora falta publicar dentro do site `SEU_DOMINIO`.
 
-- **Site (ISPConfig):** `web.cap.im` → cliente `client1`, site `web98`
-- **DocumentRoot:** `/var/www/clients/client1/web98/web`
-- **Pasta da API:** `/var/www/clients/client1/web98/web/deepseek`
-- **URL final:** `https://web.cap.im/deepseek`
+- **Site (ISPConfig):** `SEU_DOMINIO` → cliente `clientX`, site `webXX`
+- **DocumentRoot:** `/var/www/clients/clientX/webXX/web`
+- **Pasta da API:** `/var/www/clients/clientX/webXX/web/deepseek`
+- **URL final:** `https://SEU_DOMINIO/deepseek`
 - **Banco:** `deepseek_chat` @ `127.0.0.1`, usuário `deepseek_api`
 - **Tabela de tokens:** `api_tokens`
 
@@ -28,9 +28,9 @@ Aplique a migração e republica os arquivos:
 sudo mariadb deepseek_chat -e \
   "ALTER TABLE projects ADD COLUMN IF NOT EXISTS permission_mode VARCHAR(16) NOT NULL DEFAULT 'ask';"
 
-sudo cp -r /home/caperego/deepseek-api/. /var/www/clients/client1/web98/web/deepseek/
-sudo chown -R web98:client1 /var/www/clients/client1/web98/web/deepseek
-sudo find /var/www/clients/client1/web98/web/deepseek -type f -exec chmod 644 {} \;
+sudo cp -r /home/usuario/deepseek-api/. /var/www/clients/clientX/webXX/web/deepseek/
+sudo chown -R webXX:clientX /var/www/clients/clientX/webXX/web/deepseek
+sudo find /var/www/clients/clientX/webXX/web/deepseek -type f -exec chmod 644 {} \;
 ```
 
 ---
@@ -40,16 +40,16 @@ sudo find /var/www/clients/client1/web98/web/deepseek -type f -exec chmod 644 {}
 No `.235`:
 
 ```bash
-sudo mkdir -p /var/www/clients/client1/web98/web/deepseek
-sudo cp -r /home/caperego/deepseek-api/. /var/www/clients/client1/web98/web/deepseek/
-sudo chown -R web98:client1 /var/www/clients/client1/web98/web/deepseek
-sudo find /var/www/clients/client1/web98/web/deepseek -type f -exec chmod 644 {} \;
-sudo find /var/www/clients/client1/web98/web/deepseek -type d -exec chmod 755 {} \;
+sudo mkdir -p /var/www/clients/clientX/webXX/web/deepseek
+sudo cp -r /home/usuario/deepseek-api/. /var/www/clients/clientX/webXX/web/deepseek/
+sudo chown -R webXX:clientX /var/www/clients/clientX/webXX/web/deepseek
+sudo find /var/www/clients/clientX/webXX/web/deepseek -type f -exec chmod 644 {} \;
+sudo find /var/www/clients/clientX/webXX/web/deepseek -type d -exec chmod 755 {} \;
 ```
 
 ### Opção B — ISPConfig File Manager / SFTP
 
-1. ISPConfig → **Sites → web.cap.im → File Manager** (ou SFTP do site).
+1. ISPConfig → **Sites → SEU_DOMINIO → File Manager** (ou SFTP do site).
 2. Entre em `/web` e crie a pasta `deepseek`.
 3. Envie o conteúdo de `~/deepseek-api` (ou da pasta local `deepseek-api/`) para
    `/web/deepseek`.
@@ -88,18 +88,18 @@ return [
 ## 3. Verificar
 
 ```bash
-curl -s https://web.cap.im/deepseek/health
+curl -s https://SEU_DOMINIO/deepseek/health
 # {"ok":true,"time":"..."}
 ```
 
 Login e uso:
 
 ```bash
-TOKEN=$(curl -s -X POST https://web.cap.im/deepseek/auth/login \
+TOKEN=$(curl -s -X POST https://SEU_DOMINIO/deepseek/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"caperego","password":"SUA_SENHA"}' | php -r 'echo json_decode(stream_get_contents(STDIN),true)["token"];')
+  -d '{"username":"usuario","password":"SUA_SENHA"}' | php -r 'echo json_decode(stream_get_contents(STDIN),true)["token"];')
 
-curl -s https://web.cap.im/deepseek/models -H "Authorization: Bearer $TOKEN"
+curl -s https://SEU_DOMINIO/deepseek/models -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -154,7 +154,7 @@ A resposta é `text/event-stream`. O primeiro evento é
   (`output_buffering=Off`, `zlib.output_compression=Off`). Se usar nginx na
   frente, o cabeçalho `X-Accel-Buffering: no` já é enviado.
 - **config.php** é bloqueado pelo `.htaccess` (`Require all denied`).
-- **HTTPS**: ative o Let's Encrypt no ISPConfig para `web.cap.im`.
+- **HTTPS**: ative o Let's Encrypt no ISPConfig para `SEU_DOMINIO`.
 - **Segurança**: o backend guarda a API key do DeepSeek e o acesso ao banco;
   o aplicativo nunca vê essas credenciais (só o token).
 - **Usuários antigos**: senhas em PBKDF2 (do app Qt) são validadas e

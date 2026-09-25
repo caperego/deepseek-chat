@@ -364,7 +364,7 @@ Dialog {
                         TextField {
                             id: apiUrlField
                             Layout.fillWidth: true
-                            placeholderText: "https://web.cap.im/deepseek"
+                            placeholderText: "https://SEU_DOMINIO/deepseek"
                         }
 
                         Item {}

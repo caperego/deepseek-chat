@@ -120,6 +120,16 @@ bool Config::load(QString *error)
     m_api.displayName = s.value(QStringLiteral("display_name"), m_api.displayName).toString();
     s.endGroup();
 
+    m_ui.conversationTags.clear();
+    s.beginGroup(QStringLiteral("conversation_tags"));
+    for (const QString &key : s.childKeys()) {
+        const qint64 id = key.toLongLong();
+        const QStringList tags = s.value(key).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
+        if (id > 0 && !tags.isEmpty())
+            m_ui.conversationTags.insert(id, tags);
+    }
+    s.endGroup();
+
     s.beginGroup(QStringLiteral("database"));
     m_db.host = s.value(QStringLiteral("host"), m_db.host).toString();
     m_db.port = s.value(QStringLiteral("port"), m_db.port).toInt();
@@ -137,6 +147,14 @@ bool Config::load(QString *error)
     s.beginGroup(QStringLiteral("ui"));
     m_ui.theme = s.value(QStringLiteral("theme"), m_ui.theme).toString();
     m_ui.fontSize = s.value(QStringLiteral("font_size"), m_ui.fontSize).toInt();
+    m_ui.sidebarFontSize = qBound(9, s.value(QStringLiteral("sidebar_font_size"), m_ui.sidebarFontSize).toInt(), 22);
+    m_ui.codeFontSize = qBound(9, s.value(QStringLiteral("code_font_size"), m_ui.codeFontSize).toInt(), 28);
+    m_ui.fontFamily = s.value(QStringLiteral("font_family"), m_ui.fontFamily).toString();
+    m_ui.chatFontFamily = s.value(QStringLiteral("chat_font_family"), m_ui.chatFontFamily).toString();
+    m_ui.sidebarWidth = qBound(220, s.value(QStringLiteral("sidebar_width"), m_ui.sidebarWidth).toInt(), 480);
+    m_ui.sidebarCollapsed = s.value(QStringLiteral("sidebar_collapsed"), false).toBool();
+    m_ui.pinnedConversations = s.value(QStringLiteral("pinned_conversations")).toString()
+                                 .split(QLatin1Char(','), Qt::SkipEmptyParts);
     m_ui.chatFontSize = s.value(QStringLiteral("chat_font_size"),
                                 m_ui.chatFontSize).toInt();
     m_ui.enterToSend = s.value(QStringLiteral("enter_to_send"), m_ui.enterToSend).toBool();
@@ -248,12 +266,25 @@ bool Config::save(QString *error) const
     s.setValue(QStringLiteral("theme"), m_ui.theme);
     s.setValue(QStringLiteral("font_size"), m_ui.fontSize);
     s.setValue(QStringLiteral("chat_font_size"), m_ui.chatFontSize);
+    s.setValue(QStringLiteral("sidebar_font_size"), m_ui.sidebarFontSize);
+    s.setValue(QStringLiteral("code_font_size"), m_ui.codeFontSize);
+    s.setValue(QStringLiteral("font_family"), m_ui.fontFamily);
+    s.setValue(QStringLiteral("chat_font_family"), m_ui.chatFontFamily);
+    s.setValue(QStringLiteral("sidebar_width"), m_ui.sidebarWidth);
+    s.setValue(QStringLiteral("sidebar_collapsed"), m_ui.sidebarCollapsed);
+    s.setValue(QStringLiteral("pinned_conversations"), m_ui.pinnedConversations.join(QLatin1Char(',')));
     s.setValue(QStringLiteral("enter_to_send"), m_ui.enterToSend);
     s.setValue(QStringLiteral("show_reasoning"), m_ui.showReasoning);
     s.setValue(QStringLiteral("permission_mode"), m_ui.permissionMode);
     s.setValue(QStringLiteral("global_instructions"), m_ui.globalInstructions);
     s.setValue(QStringLiteral("notify_on_finish"), m_ui.notifyOnFinish);
     s.setValue(QStringLiteral("close_to_tray"), m_ui.closeToTray);
+    s.endGroup();
+
+    s.beginGroup(QStringLiteral("conversation_tags"));
+    s.remove(QString());
+    for (auto it = m_ui.conversationTags.constBegin(); it != m_ui.conversationTags.constEnd(); ++it)
+        s.setValue(QString::number(it.key()), it.value().join(QLatin1Char(',')));
     s.endGroup();
 
     s.beginGroup(QStringLiteral("audio"));

@@ -65,11 +65,23 @@ CREATE TABLE IF NOT EXISTS conversations (
   title VARCHAR(255) NOT NULL DEFAULT 'Nova conversa',
   model VARCHAR(64) NOT NULL DEFAULT 'deepseek-flash',
   effort VARCHAR(16) NOT NULL DEFAULT 'high',
+  parent_id BIGINT NULL,
+  fork_message_id BIGINT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_conv_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_conv_user (user_id, updated_at),
   INDEX idx_conv_project (project_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS project_memories (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  project_id BIGINT NOT NULL,
+  content TEXT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_memory_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  INDEX idx_memory_project (project_id, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -79,6 +91,7 @@ CREATE TABLE IF NOT EXISTS messages (
   content MEDIUMTEXT NOT NULL,
   reasoning MEDIUMTEXT NULL,
   attachments_json LONGTEXT NULL,
+  sources_json LONGTEXT NULL,
   model VARCHAR(64) NOT NULL DEFAULT '',
   prompt_tokens INT NOT NULL DEFAULT 0,
   completion_tokens INT NOT NULL DEFAULT 0,
@@ -100,7 +113,10 @@ CREATE TABLE IF NOT EXISTS activities (
 
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS project_id BIGINT NULL;
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS effort VARCHAR(16) NOT NULL DEFAULT 'high';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS parent_id BIGINT NULL;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS fork_message_id BIGINT NULL;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments_json LONGTEXT NULL;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources_json LONGTEXT NULL;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS prompt_tokens INT NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS completion_tokens INT NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS cached_tokens INT NOT NULL DEFAULT 0;

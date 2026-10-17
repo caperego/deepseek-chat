@@ -9,7 +9,50 @@ Item {
     property bool isSystem: msgRole === "system"
     property bool isTool: msgRole === "tool"
     property bool detailOpen: false
+    property bool reasoningOpen: false
+    property bool internalOpen: false
     readonly property bool isLast: index === ListView.view.count - 1
+    readonly property int internalStart: !isUser && !isSystem && !isTool
+        ? displayContent.search(/<(?:｜|\|)+DSML(?:｜|\|)+[^>]*>/) : -1
+    readonly property string conversationText: internalStart >= 0
+        ? displayContent.substring(0, internalStart).trim() : displayContent
+    readonly property string internalText: internalStart >= 0
+        ? displayContent.substring(internalStart) : ""
+
+    function activityLabel() {
+        var text = String(content || "")
+        if (/negado pelo usuário/i.test(text))
+            return "Ação não autorizada"
+        if (/cancelad/i.test(text))
+            return "Ação cancelada"
+        var result = {}
+        try { result = JSON.parse(detail || "{}") } catch (e) {}
+        if (!result || typeof result !== "object")
+            result = {}
+        var failed = !!result.error || result.timed_out === true
+                || (typeof result.exit_code === "number" && result.exit_code !== 0)
+                || (typeof result.status === "number" && result.status >= 400)
+                || /falh|inválid|não encontrad|não informado|sem backup|parado|erro MCP|desconhecida/i.test(text)
+        if (failed && !streaming)
+            return "Não foi possível concluir esta etapa"
+        var match = text.match(/^\s*⚙\s+([\w]+)/)
+        var name = match ? match[1] : ""
+        var activities = {
+            run_command: ["Executando…", "Execução concluída"],
+            list_files: ["Verificando pasta…", "Pasta verificada"],
+            read_file: ["Lendo arquivo…", "Arquivo lido"],
+            write_file: ["Salvando arquivo…", "Arquivo salvo"],
+            find_files: ["Localizando arquivos…", "Busca concluída"],
+            grep_files: ["Buscando nos arquivos…", "Busca concluída"],
+            fetch_url: ["Consultando página…", "Página consultada"],
+            browse_url: ["Consultando página…", "Página consultada"],
+            search_web: ["Pesquisando…", "Pesquisa concluída"],
+            download_file: ["Baixando arquivo…", "Download concluído"],
+            restore_file: ["Restaurando arquivo…", "Arquivo restaurado"]
+        }
+        var labels = activities[name] || ["Processando…", "Etapa concluída"]
+        return labels[streaming ? 0 : 1]
+    }
 
     HoverHandler {
         id: messageHover
@@ -22,6 +65,21 @@ Item {
         while ((m = re.exec(text)) !== null)
             out.push(m[1])
         return out.join("\n\n")
+    }
+
+    function codeBlockAt(text, targetIndex) {
+        var parts = String(text || "").split(/```/)
+        var codeIndex = 0
+        for (var i = 1; i < parts.length; i += 2) {
+            var part = parts[i]
+            var newline = part.indexOf("\n")
+            var body = newline >= 0 ? part.substring(newline + 1) : part
+            body = body.replace(/\n$/, "")
+            if (codeIndex === targetIndex)
+                return body
+            ++codeIndex
+        }
+        return ""
     }
 
     function detailPath() {
@@ -77,7 +135,8 @@ Item {
 
     function highlight(code, lang) {
         var keywordRegex = new RegExp("^(" + keywordsFor(lang) + ")$")
-        var tokens = escapeHtml(code).split(/(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;|`[^`]*`|\/\/[^\n]*|#[^\n]*|--[^\n]*|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g)
+        var escapedCode = escapeHtml(code).replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+        var tokens = escapedCode.split(/(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;|`[^`]*`|\/\/[^\n]*|#[^\n]*|--[^\n]*|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g)
         var out = ""
         for (var i = 0; i < tokens.length; ++i) {
             var token = tokens[i]
@@ -86,14 +145,14 @@ Item {
             var style = ""
             if (token.indexOf("&quot;") === 0 || token.indexOf("&#39;") === 0
                     || token.indexOf("`") === 0)
-                style = "color:#98c379"
+                style = theme.dark ? "color:#98c379" : "color:#357a38"
             else if (token.indexOf("//") === 0 || token.indexOf("#") === 0
                      || token.indexOf("--") === 0)
-                style = "color:#7f848e;font-style:italic"
+                style = (theme.dark ? "color:#7f848e" : "color:#686d76") + ";font-style:italic"
             else if (/^\d/.test(token))
-                style = "color:#d19a66"
+                style = theme.dark ? "color:#d19a66" : "color:#985b13"
             else if (keywordRegex.test(token))
-                style = "color:#c678dd"
+                style = theme.dark ? "color:#c678dd" : "color:#8e3ba3"
             out += style.length > 0 ? '<span style="' + style + '">' + token + '</span>'
                                     : token
         }
@@ -105,7 +164,8 @@ Item {
         var codeFg = theme.dark ? "#ececec" : "#1f1f1f"
         var s = text
         s = s.replace(/`([^`\n]+)`/g, '<code style="background:' + codeBg
-                      + ';color:' + codeFg + ';padding:1px 4px;border-radius:4px;">$1</code>')
+                      + ';color:' + codeFg + ';font-family:Consolas;font-size:' + theme.codeFontSize
+                      + 'pt;padding:1px 4px;border-radius:4px;">$1</code>')
         s = s.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
         s = s.replace(/__([^_\n]+)__/g, "<b>$1</b>")
         s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1<i>$2</i>")
@@ -126,6 +186,7 @@ Item {
         var out = ""
         var codeBg = theme.dark ? "#1b1b1b" : "#f5f5f5"
         var codeFg = theme.dark ? "#ececec" : "#1f1f1f"
+        var codeIndex = 0
 
         for (var i = 0; i < parts.length; ++i) {
             var part = parts[i]
@@ -133,30 +194,46 @@ Item {
                 var newline = part.indexOf("\n")
                 var lang = newline >= 0 ? part.substring(0, newline).trim() : ""
                 var body = newline >= 0 ? part.substring(newline + 1) : part
-                out += '<br><pre style="background:' + codeBg + ';color:' + codeFg
-                        + ';padding:8px;border-radius:6px;white-space:pre;">'
-                        + highlight(body, lang) + '</pre><br>'
+                body = body.replace(/\n$/, "")
+                var languageLabel = lang.length > 0 ? lang.toUpperCase() : "CÓDIGO"
+                out += '<table width="100%" cellspacing="0" cellpadding="8" bgcolor="'
+                        + codeBg + '"><tr><td><b>' + languageLabel + '</b></td><td align="right">'
+                        + '<a href="copy-code:' + codeIndex + '">⧉ Copiar código</a></td></tr>'
+                        + '<tr><td colspan="2"><pre style="color:' + codeFg
+                        + ';font-family:Consolas;font-size:' + theme.codeFontSize
+                        + 'pt;white-space:pre;margin:0;">'
+                        + highlight(body, lang) + '</pre></td></tr></table><br>'
+                ++codeIndex
                 continue
             }
 
             var lines = escapeHtml(part).split("\n")
-            var inTable = false
             for (var j = 0; j < lines.length; ++j) {
                 var line = lines[j]
                 var trimmed = line.trim()
 
-                if (trimmed.indexOf("|") === 0 && trimmed.length > 1) {
-                    if (!inTable) {
-                        out += '<br><pre style="background:' + codeBg + ';color:' + codeFg
-                                + ';padding:6px;border-radius:6px;white-space:pre;">'
-                        inTable = true
+                var headers = tableCells(trimmed)
+                var separators = j + 1 < lines.length ? tableCells(lines[j + 1].trim()) : []
+                if (headers.length > 1 && headers.length === separators.length
+                        && separators.every(function (cell) { return /^:?-{3,}:?$/.test(cell) })) {
+                    out += '<table width="100%" border="1" cellspacing="0" cellpadding="6"'
+                            + ' style="border-color:' + theme.border + ';">'
+                    var alignments = separators.map(function (cell) {
+                        return cell.charAt(0) === ':' && cell.charAt(cell.length - 1) === ':'
+                            ? 'center' : (cell.charAt(cell.length - 1) === ':' ? 'right' : 'left')
+                    })
+                    out += tableRow(headers, alignments, true, codeBg)
+                    j += 2
+                    while (j < lines.length && lines[j].trim().indexOf('|') >= 0) {
+                        var cells = tableCells(lines[j].trim())
+                        if (cells.length !== headers.length)
+                            break
+                        out += tableRow(cells, alignments, false, codeBg)
+                        ++j
                     }
-                    out += inlineFormat(trimmed) + "\n"
+                    --j
+                    out += '</table><br>'
                     continue
-                }
-                if (inTable) {
-                    out += "</pre><br>"
-                    inTable = false
                 }
 
                 if (trimmed.length === 0) {
@@ -194,8 +271,6 @@ Item {
 
                 out += inlineFormat(line) + "<br>"
             }
-            if (inTable)
-                out += "</pre><br>"
         }
 
         var cleaned = out.replace(/(<br>\s*){3,}/g, "<br><br>")
@@ -204,17 +279,53 @@ Item {
         return cleaned
     }
 
+    function tableCells(line) {
+        if (line.indexOf('|') < 0)
+            return []
+        var body = line.replace(/^\|/, '')
+        if (body.endsWith('|') && !body.endsWith('\\|'))
+            body = body.slice(0, -1)
+        var cells = []
+        var cell = ''
+        for (var i = 0; i < body.length; ++i) {
+            if (body.charAt(i) === '\\' && body.charAt(i + 1) === '|') {
+                cell += '|'
+                ++i
+            } else if (body.charAt(i) === '|') {
+                cells.push(cell.trim())
+                cell = ''
+            } else {
+                cell += body.charAt(i)
+            }
+        }
+        cells.push(cell.trim())
+        return cells
+    }
+
+    function tableRow(cells, alignments, header, background) {
+        var out = '<tr>'
+        for (var i = 0; i < cells.length; ++i) {
+            out += '<td align="' + alignments[i] + '"'
+                    + (header ? ' bgcolor="' + background + '"' : '') + '>'
+                    + (header ? '<b>' : '') + inlineFormat(cells[i])
+                    + (header ? '</b>' : '') + '</td>'
+        }
+        return out + '</tr>'
+    }
+
     implicitHeight: layout.implicitHeight
 
     TextMetrics {
         id: metrics
         font.pointSize: theme.chatFontSize
+        font.family: theme.chatFontFamily
         text: displayContent
     }
 
     ColumnLayout {
         id: layout
-        width: parent.width
+        width: Math.min(parent.width, 820)
+        anchors.horizontalCenter: parent.horizontalCenter
         spacing: 6
 
         Rectangle {
@@ -242,18 +353,18 @@ Item {
                     Text {
                         id: toolText
                         Layout.fillWidth: true
-                        text: displayContent + (streaming ? " …" : "")
+                        text: delegate.activityLabel()
                         color: theme.muted
                         wrapMode: Text.Wrap
-                        font.pointSize: Math.max(9, theme.chatFontSize - 2)
+                        font.pointSize: 10
                     }
 
                     AppButton {
-                        visible: detail.length > 0
-                        text: delegate.detailOpen ? "Ocultar" : "Ver saída"
+                        visible: detail.length > 0 || content.length > 0
+                        text: delegate.detailOpen ? "Ocultar detalhes" : "Ver detalhes"
                         ghost: true
                         implicitHeight: 22
-                        font.pointSize: Math.max(9, theme.chatFontSize - 3)
+                        font.pointSize: 10
                         onClicked: delegate.detailOpen = !delegate.detailOpen
                     }
 
@@ -262,7 +373,7 @@ Item {
                         text: "Painel"
                         ghost: true
                         implicitHeight: 22
-                        font.pointSize: Math.max(9, theme.chatFontSize - 3)
+                        font.pointSize: 10
                         onClicked: app.openArtifact(delegate.detailPath())
                     }
                 }
@@ -270,7 +381,7 @@ Item {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 200
-                    visible: delegate.detailOpen && detail.length > 0
+                    visible: delegate.detailOpen
                     radius: 6
                     color: theme.dark ? "#171717" : "#ffffff"
                     border.color: theme.border
@@ -280,12 +391,12 @@ Item {
                         anchors.fill: parent
                         anchors.margins: 6
 
-                        TextArea {
-                            text: detail
+                        CopyableTextArea {
+                            text: content + (detail.length > 0 ? "\n\n" + detail : "")
                             readOnly: true
                             wrapMode: TextArea.NoWrap
-                            font.family: "monospace"
-                            font.pointSize: Math.max(9, theme.chatFontSize - 3)
+                            font.family: "Consolas"
+                            font.pointSize: theme.codeFontSize
                             color: theme.text
                         }
                     }
@@ -328,26 +439,44 @@ Item {
             wrapMode: Text.Wrap
         }
 
-        Rectangle {
+        ColumnLayout {
             Layout.fillWidth: true
-            visible: reasoning.length > 0 && app.showReasoning && !isTool
-            radius: 8
-            color: theme.dark ? "#2a2a2a" : "#f3f4f6"
-            implicitHeight: reasonText.implicitHeight + 16
+            visible: !isTool && !isUser && !isSystem
+                     && ((reasoning.length > 0 && app.showReasoning)
+                         || (streaming && conversationText.length === 0))
+            spacing: 6
 
-            Text {
-                id: reasonText
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: 8
-                text: reasoning
-                color: theme.muted
-                font.italic: true
-                font.pointSize: Math.max(9, theme.chatFontSize - 1)
-                wrapMode: Text.Wrap
-                maximumLineCount: 5
-                elide: Text.ElideRight
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    Layout.fillWidth: true
+                    text: streaming && conversationText.length === 0 ? "Pensando…" : "Pensamento"
+                    color: theme.muted
+                    font.pointSize: 10
+                }
+                AppButton {
+                    visible: reasoning.length > 0 && app.showReasoning
+                    text: delegate.reasoningOpen ? "Ocultar detalhes" : "Ver detalhes"
+                    ghost: true
+                    implicitHeight: 22
+                    font.pointSize: 10
+                    onClicked: delegate.reasoningOpen = !delegate.reasoningOpen
+                }
+            }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(240, reasonText.contentHeight + 16)
+                visible: delegate.reasoningOpen && reasoning.length > 0 && app.showReasoning
+                clip: true
+                CopyableTextArea {
+                    id: reasonText
+                    text: reasoning
+                    readOnly: true
+                    wrapMode: TextArea.Wrap
+                    color: theme.muted
+                    font.pointSize: Math.max(9, theme.chatFontSize - 1)
+                    font.family: theme.chatFontFamily
+                }
             }
         }
 
@@ -355,27 +484,108 @@ Item {
             Layout.alignment: isUser ? Qt.AlignRight : Qt.AlignLeft
             Layout.fillWidth: !isUser
             Layout.preferredWidth: isUser ? Math.min(680, Math.max(90, metrics.width + 26)) : -1
+            Layout.maximumWidth: layout.width
             visible: !isTool
             radius: isUser ? 16 : 0
             color: isUser ? theme.userBubble
                           : (isSystem ? theme.systemBubble : "transparent")
             implicitHeight: bodyText.contentHeight + (isUser ? 18 : 0)
 
-            TextEdit {
+            CopyableTextEdit {
                 id: bodyText
                 width: parent.width - (isUser ? 20 : 0)
                 x: isUser ? 10 : 0
                 y: isUser ? 9 : 0
                 text: (isUser || isSystem)
                       ? displayContent + (streaming ? " ▌" : "")
-                      : delegate.richText(displayContent) + (streaming ? " ▌" : "")
+                      : delegate.richText(conversationText)
+                        + (streaming && conversationText.length > 0 ? " ▌" : "")
                 textFormat: (isUser || isSystem) ? TextEdit.PlainText : TextEdit.RichText
                 readOnly: true
                 selectByMouse: true
                 wrapMode: TextEdit.Wrap
                 color: theme.text
                 font.pointSize: theme.chatFontSize
-                onLinkActivated: function (link) { app.openExternal(link) }
+                font.family: theme.chatFontFamily
+                onLinkActivated: function (link) {
+                    if (link.indexOf("copy-code:") === 0) {
+                        app.copyToClipboard(delegate.codeBlockAt(conversationText,
+                                                                Number(link.substring(10))))
+                        return
+                    }
+                    app.openExternal(link)
+                }
+
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: delegate.internalText.length > 0
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    Layout.fillWidth: true
+                    text: "Esta etapa não tem execução confirmada."
+                    color: theme.muted
+                    font.pointSize: Math.max(9, theme.chatFontSize - 2)
+                    wrapMode: Text.Wrap
+                }
+                AppButton {
+                    text: delegate.internalOpen ? "Ocultar detalhes" : "Ver detalhes"
+                    ghost: true
+                    onClicked: delegate.internalOpen = !delegate.internalOpen
+                }
+            }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 240
+                visible: delegate.internalOpen
+                clip: true
+                CopyableTextArea {
+                    text: delegate.internalText
+                    readOnly: true
+                    wrapMode: TextArea.Wrap
+                    font.family: "Consolas"
+                    font.pointSize: theme.codeFontSize
+                    color: theme.muted
+                }
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: !isUser && !isTool && sources.length > 0
+            spacing: 4
+
+            Text {
+                text: "Fontes consultadas"
+                color: theme.muted
+                font.bold: true
+                font.pointSize: Math.max(9, theme.chatFontSize - 2)
+            }
+
+            Repeater {
+                model: sources
+                delegate: ColumnLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: 2
+                    AppButton {
+                        text: (modelData.title || modelData.url) + " ↗"
+                        ghost: true
+                        onClicked: app.openExternal(modelData.url)
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: modelData.excerpt || ""
+                        color: theme.muted
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 3
+                        elide: Text.ElideRight
+                        font.pointSize: Math.max(9, theme.chatFontSize - 3)
+                    }
+                }
             }
         }
 
@@ -441,7 +651,7 @@ Item {
                     onClicked: app.copyToClipboard(delegate.codeBlocks(content))
 
                     ToolTip.visible: containsMouse
-                    ToolTip.text: "Copiar código"
+                    ToolTip.text: "Copiar todos os códigos"
                 }
             }
 
@@ -466,6 +676,20 @@ Item {
                     ToolTip.visible: containsMouse
                     ToolTip.text: "Editar"
                 }
+            }
+
+            AppButton {
+                visible: messageId > 0
+                text: "Ramificar"
+                ghost: true
+                onClicked: app.branchFromMessage(messageId)
+            }
+
+            AppButton {
+                visible: messageId > 0 && app.activeProjectId > 0
+                text: "Memorizar"
+                ghost: true
+                onClicked: app.rememberMessage(messageId)
             }
 
             Item {
@@ -540,9 +764,10 @@ Item {
 
                 Dialog {
                     id: previewDialog
+                    parent: Overlay.overlay
                     title: fileCard.modelData.path
                     modal: true
-                    font.pointSize: theme.chatFontSize
+                    font.pointSize: theme.fontSize
                     anchors.centerIn: parent
                     width: 760
                     height: 540
@@ -551,12 +776,12 @@ Item {
                     ScrollView {
                         anchors.fill: parent
 
-                        TextArea {
+                        CopyableTextArea {
                             text: fileCard.modelData.content
                             readOnly: true
                             wrapMode: TextArea.NoWrap
-                            font.family: "monospace"
-                            font.pointSize: theme.chatFontSize
+                            font.family: "Consolas"
+                            font.pointSize: theme.codeFontSize
                         }
                     }
                 }
@@ -566,6 +791,7 @@ Item {
 
     Dialog {
         id: editDialog
+        parent: Overlay.overlay
         modal: true
         anchors.centerIn: parent
         width: 560
@@ -581,9 +807,11 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 220
 
-                TextArea {
+                CopyableTextArea {
                     id: editArea
                     wrapMode: TextArea.Wrap
+                    font.pointSize: theme.chatFontSize
+                    font.family: theme.chatFontFamily
                 }
             }
         }

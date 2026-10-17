@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
 
 struct User {
     qint64 id = 0;
@@ -78,6 +79,8 @@ struct Conversation {
     qint64 id = 0;
     qint64 userId = 0;
     qint64 projectId = 0;
+    qint64 parentId = 0;
+    qint64 forkMessageId = 0;
     QString title;
     QString model;
     QString effort;
@@ -95,6 +98,7 @@ struct Message {
     QString toolCallId;
     QVector<ToolCall> toolCalls;
     QVector<Attachment> attachments;
+    QVariantList sources;
     qint64 promptTokens = 0;
     qint64 completionTokens = 0;
     qint64 cachedTokens = 0;

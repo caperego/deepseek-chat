@@ -42,6 +42,7 @@ exigem `Authorization: Bearer <token>`.
   "tools": [ ... definições OpenAI-compatible ... ],
   "tool_choice": "auto",
   "attachments": [ {"kind":"file","name":"...","path":"...","mime":"...","text":"..."} ],
+  "sources": [ {"url":"https://...","title":"...","excerpt":"..."} ],
   "persist": true,
   "persist_user": true
 }
@@ -49,6 +50,7 @@ exigem `Authorization: Bearer <token>`.
 
 - `persist:false` → não grava nada (usado para títulos/resumos internos).
 - `persist_user:false` → não grava a última mensagem do usuário (regenerar).
+- `sources` registra até 12 páginas efetivamente abertas para exibir junto à resposta.
 - A resposta é `text/event-stream`; o primeiro evento é
   `event: meta` com `{"conversation_id": N}`; os deltas seguem o formato da API
   DeepSeek (`choices[0].delta.content`, `reasoning_content`, `tool_calls`) e há um
@@ -63,6 +65,9 @@ exigem `Authorization: Bearer <token>`.
 | GET/POST | `/conversations` | lista (`?project_id=0` sem projeto) / cria |
 | PUT/DELETE | `/conversations/{id}` | renomeia/move (`project_id`)/exclui |
 | POST | `/conversations/{id}/truncate` | apaga mensagens a partir de `from_message_id` |
+| POST | `/conversations/{id}/branch` | cria ramificação; `through_message_id` inclui até a mensagem indicada, `0` copia tudo, `-1` começa vazia |
+| GET/POST | `/project-memories` | lista ou cria memórias do projeto (`project_id`) |
+| PUT/DELETE | `/project-memories/{id}` | edita ou exclui memória |
 | GET/POST | `/messages` | histórico (`?conversation_id=`) / grava |
 | GET/POST | `/commands` | comandos globais ou do projeto (`?project_id=`) |
 | PUT/DELETE | `/commands/{id}` | atualiza/exclui |
@@ -72,6 +77,12 @@ exigem `Authorization: Bearer <token>`.
 | GET | `/activities` | auditoria |
 | POST | `/activities` | registra evento do cliente |
 | GET | `/usage?conversation_id=` | tokens por conversa e por modelo |
+
+As mensagens retornadas por `/messages` incluem `sources` quando a resposta usou
+páginas da web. Cada fonte contém `url`, `title` e `excerpt`.
+
+Instalações existentes precisam aplicar `deepseek-api/sql/2026-09-28-chat-features.sql`
+antes de usar os novos endpoints.
 
 ## Multi-provedor
 

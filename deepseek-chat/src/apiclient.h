@@ -53,6 +53,9 @@ public:
     bool moveConversation(qint64 id, qint64 projectId, QString *error = nullptr);
     bool truncateConversation(qint64 conversationId, qint64 fromMessageId,
                               QString *error = nullptr);
+    bool branchConversation(qint64 conversationId, qint64 throughMessageId,
+                            const QString &title, qint64 *newId,
+                            QString *error = nullptr);
     bool searchMessages(const QString &query, QVector<SearchHit> *out,
                         QString *error = nullptr);
     bool deleteConversation(qint64 id, QString *error = nullptr);
@@ -75,6 +78,14 @@ public:
                       QString *error = nullptr);
     bool addProjectItem(const ProjectItem &item, QString *error = nullptr);
     bool removeProjectItem(qint64 id, QString *error = nullptr);
+
+    bool projectMemories(qint64 projectId, QVariantList *out,
+                         QString *error = nullptr);
+    bool addProjectMemory(qint64 projectId, const QString &content,
+                          QString *error = nullptr);
+    bool updateProjectMemory(qint64 id, const QString &content,
+                             QString *error = nullptr);
+    bool deleteProjectMemory(qint64 id, QString *error = nullptr);
 
     bool activities(QVector<Activity> *out, QString *error = nullptr);
     bool logActivity(const QString &action, const QString &details,

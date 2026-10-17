@@ -1,11 +1,22 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Effects
 
 Rectangle {
     id: sidebar
     color: theme.sidebar
+    signal collapseRequested()
+    property var collapsedProjects: ({})
+
+    function openSettings() { settingsDialog.open() }
+    function openNewProject() { newProjectDialog.open() }
+    function openTerminal() { terminalDialog.open() }
+    function openActivities() { activitiesDialog.open() }
+    function toggleProject(id) {
+        var folded = Object.assign({}, collapsedProjects)
+        folded[id] = !folded[id]
+        collapsedProjects = folded
+    }
 
     Rectangle {
         width: 1
@@ -28,8 +39,17 @@ Rectangle {
                 }
             }
         }
-        if (term.length === 0)
-            return app.sidebar
+        if (term.length === 0) {
+            var project = 0
+            for (var row = 0; row < app.sidebar.length; ++row) {
+                var entry = app.sidebar[row]
+                if (entry.type === "project") project = entry.id
+                if (entry.type === "header") project = 0
+                if (entry.type === "conv" && project && collapsedProjects[project]) continue
+                out.push(entry)
+            }
+            return out
+        }
         for (var j = 0; j < app.sidebar.length; ++j) {
             var item = app.sidebar[j]
             if (item.type !== "header" && item.title
@@ -41,8 +61,8 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 10
-        spacing: 8
+        anchors.margins: 12
+        spacing: 10
 
         RowLayout {
             spacing: 8
@@ -56,31 +76,47 @@ Rectangle {
             Text {
                 text: "DeepSeek Chat"
                 font.bold: true
-                font.pixelSize: 17
+                font.pointSize: theme.sidebarFontSize + 1
+                font.family: theme.fontFamily
                 color: theme.text
                 Layout.fillWidth: true
+            }
+            AppButton {
+                text: "‹"
+                ghost: true
+                implicitWidth: 28
+                leftPadding: 4
+                rightPadding: 4
+                font.pointSize: theme.sidebarFontSize + 3
+                ToolTip.text: "Recolher projetos e conversas"
+                ToolTip.visible: hovered
+                onClicked: sidebar.collapseRequested()
             }
         }
 
         Text {
             text: "Conectado como " + (app.displayName.length > 0 ? app.displayName : app.userName)
             color: theme.muted
-            font.pixelSize: 12
+            font.pointSize: Math.max(9, theme.sidebarFontSize - 1)
+            font.family: theme.fontFamily
             elide: Text.ElideRight
             Layout.fillWidth: true
         }
 
         AppButton {
-            text: "+  Nova conversa"
+            text: "Nova conversa"
             icon.source: "qrc:/resources/icons/plus.svg"
             Layout.fillWidth: true
+            font.pointSize: theme.sidebarFontSize
+            primary: true
             onClicked: app.newConversation(app.activeProjectId)
         }
 
         AppButton {
-            text: "+  Novo projeto"
+            text: "Novo projeto"
             icon.source: "qrc:/resources/icons/folder.svg"
             Layout.fillWidth: true
+            font.pointSize: theme.sidebarFontSize
             onClicked: newProjectDialog.open()
         }
 
@@ -88,9 +124,18 @@ Rectangle {
             id: search
             placeholderText: "Pesquisar..."
             Layout.fillWidth: true
+            font.pointSize: theme.sidebarFontSize
+            font.family: theme.fontFamily
+            leftPadding: 14
+            implicitHeight: Math.max(40, contentHeight + 18)
+            background: Rectangle {
+                radius: 11
+                color: theme.card
+                border.color: search.activeFocus ? theme.accent : theme.border
+            }
 
             onTextChanged: {
-                if (text.trimmed().length >= 2) {
+                if (text.trim().length >= 2) {
                     searchTimer.restart()
                 } else {
                     searchTimer.stop()
@@ -111,7 +156,8 @@ Rectangle {
             Layout.fillHeight: true
             clip: true
             model: sidebar.filteredModel
-            spacing: 2
+            spacing: 1
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
             delegate: Rectangle {
                 id: itemRect
@@ -130,24 +176,16 @@ Rectangle {
 
                 width: list.width
                 height: modelData.type === "header"
-                        ? (itemRect.mainHeader ? 38 : 30)
-                        : (modelData.type === "search" ? 52 : 40)
-                radius: 8
+                        ? (itemRect.mainHeader ? 40 : 30)
+                        : (modelData.type === "search" ? Math.max(52, theme.sidebarFontSize * 4)
+                           : (modelData.type === "project" ? 38 : 34))
+                radius: 9
                 color: {
                     if (modelData.type === "header")
                         return "transparent"
                     if (selectedConv)
-                        return theme.accent
+                        return theme.selected
                     return mouse.containsMouse ? theme.selected : "transparent"
-                }
-
-                RectangularShadow {
-                    anchors.fill: parent
-                    radius: parent.radius
-                    blur: 16
-                    color: theme.accent
-                    offset: Qt.vector2d(0, 3)
-                    visible: itemRect.selectedConv
                 }
 
                 Canvas {
@@ -160,7 +198,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
 
                     readonly property color spinnerColor: itemRect.selectedConv
-                            ? "#ffffff" : theme.accent
+                            ? theme.text : theme.accent
 
                     onSpinnerColorChanged: requestPaint()
                     onVisibleChanged: if (visible) requestPaint()
@@ -191,19 +229,22 @@ Rectangle {
                     anchors.top: modelData.type === "search" ? parent.top : undefined
                     anchors.topMargin: 5
                     anchors.left: parent.left
-                    anchors.leftMargin: 10 + (modelData.indent ? modelData.indent * 16 : 0)
+                    anchors.leftMargin: (modelData.type === "project" ? 32 : 12)
+                        + (modelData.indent ? modelData.indent * 12 : 0)
                     anchors.right: parent.right
                     anchors.rightMargin: itemRect.busy ? 30 : 8
-                    text: modelData.title
+                    text: modelData.type === "conv"
+                          ? (modelData.pinned ? "★ " : "")
+                            + (modelData.parentId > 0 ? "↳ " : "") + modelData.title
+                          : modelData.title
                     color: modelData.type === "header"
-                           ? theme.accent
-                           : (itemRect.selectedConv ? "#ffffff" : theme.text)
-                    font.bold: modelData.type === "header" || itemRect.selectedConv
-                               || modelData.type === "project"
-                               || modelData.type === "search"
-                    font.pixelSize: modelData.type === "header"
-                                    ? (itemRect.mainHeader ? 15 : 13) : 14
-                    font.letterSpacing: modelData.type === "header" ? 0.8 : 0
+                           ? theme.muted : theme.text
+                    font.bold: itemRect.selectedConv || modelData.type === "search"
+                    font.weight: modelData.type === "header" || modelData.type === "project"
+                                 ? Font.DemiBold : Font.Normal
+                    font.pointSize: modelData.type === "header"
+                                    ? Math.max(10, theme.sidebarFontSize - 1) : theme.sidebarFontSize
+                    font.family: theme.fontFamily
                     elide: Text.ElideRight
                 }
 
@@ -217,7 +258,8 @@ Rectangle {
                     anchors.topMargin: 27
                     text: modelData.snippet !== undefined ? modelData.snippet : ""
                     color: theme.muted
-                    font.pixelSize: 11
+                    font.pointSize: Math.max(9, theme.sidebarFontSize - 2)
+                    font.family: theme.fontFamily
                     elide: Text.ElideRight
                     maximumLineCount: 1
                 }
@@ -253,6 +295,18 @@ Rectangle {
                             app.openConversation(modelData.id)
                     }
                 }
+                ToolButton {
+                    visible: modelData.type === "project"
+                    width: 28
+                    height: parent.height
+                    text: sidebar.collapsedProjects[modelData.id] ? "›" : "⌄"
+                    font.pointSize: theme.sidebarFontSize
+                    ToolTip.text: sidebar.collapsedProjects[modelData.id]
+                                  ? "Mostrar conversas do projeto" : "Recolher conversas do projeto"
+                    ToolTip.visible: hovered
+                    Accessible.name: ToolTip.text
+                    onClicked: sidebar.toggleProject(modelData.id)
+                }
             }
         }
 
@@ -262,6 +316,8 @@ Rectangle {
 
             AppButton {
                 text: "Atividades"
+                ghost: true
+                font.pointSize: theme.sidebarFontSize
                 icon.source: "qrc:/resources/icons/list.svg"
                 Layout.fillWidth: true
                 onClicked: {
@@ -272,6 +328,8 @@ Rectangle {
 
             AppButton {
                 text: "Terminal"
+                ghost: true
+                font.pointSize: theme.sidebarFontSize
                 icon.source: "qrc:/resources/icons/slash.svg"
                 Layout.fillWidth: true
                 onClicked: terminalDialog.open()
@@ -279,6 +337,8 @@ Rectangle {
 
             AppButton {
                 text: "Configurações"
+                ghost: true
+                font.pointSize: theme.sidebarFontSize
                 icon.source: "qrc:/resources/icons/gear.svg"
                 Layout.fillWidth: true
                 onClicked: settingsDialog.open()
@@ -286,6 +346,8 @@ Rectangle {
 
             AppButton {
                 text: "Sair"
+                ghost: true
+                font.pointSize: theme.sidebarFontSize
                 icon.source: "qrc:/resources/icons/logout.svg"
                 Layout.fillWidth: true
                 onClicked: app.logout()
@@ -322,6 +384,23 @@ Rectangle {
         id: convMenu
 
         MenuItem {
+            text: app.isConversationPinned(ctx.targetId) ? "Desafixar conversa" : "Fixar conversa"
+            onTriggered: app.toggleConversationPinned(ctx.targetId)
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
+            text: "Editar etiquetas"
+            onTriggered: tagsDialog.open()
+        }
+
+        MenuItem {
+            text: "Ramificar conversa"
+            onTriggered: app.branchConversation(ctx.targetId)
+        }
+
+        MenuItem {
             text: "Transformar em projeto"
             onTriggered: app.convertConversationToProject(ctx.targetId)
         }
@@ -338,7 +417,27 @@ Rectangle {
     }
 
     Dialog {
+        id: tagsDialog
+        parent: Overlay.overlay
+        title: "Etiquetas da conversa"
+        modal: true
+        anchors.centerIn: parent
+        width: 380
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        TextField {
+            id: tagsField
+            width: parent.width
+            placeholderText: "Ex.: trabalho, urgente"
+        }
+
+        onOpened: tagsField.text = app.conversationTags(ctx.targetId)
+        onAccepted: app.setConversationTags(ctx.targetId, tagsField.text)
+    }
+
+    Dialog {
         id: renameDialog
+        parent: Overlay.overlay
         title: "Renomear conversa"
         modal: true
     font.pointSize: theme.fontSize
@@ -358,6 +457,7 @@ Rectangle {
 
     Dialog {
         id: deleteDialog
+        parent: Overlay.overlay
     font.pointSize: theme.fontSize
         title: "Excluir conversa"
         modal: true
@@ -377,6 +477,7 @@ Rectangle {
 
     Dialog {
         id: deleteProjectDialog
+        parent: Overlay.overlay
     font.pointSize: theme.fontSize
         title: "Excluir projeto"
         modal: true
@@ -397,6 +498,7 @@ Rectangle {
 
     Dialog {
         id: newProjectDialog
+        parent: Overlay.overlay
     font.pointSize: theme.fontSize
         title: "Novo projeto"
         modal: true
@@ -465,16 +567,19 @@ Rectangle {
 
     SettingsDialog {
         id: settingsDialog
+        parent: Overlay.overlay
         anchors.centerIn: parent
     }
 
     ActivitiesDialog {
         id: activitiesDialog
+        parent: Overlay.overlay
         anchors.centerIn: parent
     }
 
     Dialog {
         id: terminalDialog
+        parent: Overlay.overlay
         modal: true
         anchors.centerIn: parent
         width: 820
@@ -492,7 +597,7 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                TextArea {
+                CopyableTextArea {
                     id: outputArea
                     readOnly: true
                     wrapMode: TextArea.NoWrap

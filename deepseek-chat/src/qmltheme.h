@@ -10,6 +10,10 @@ class QmlTheme : public QObject {
     Q_PROPERTY(bool dark READ dark NOTIFY changed)
     Q_PROPERTY(int fontSize READ fontSize WRITE setFontSize NOTIFY changed)
     Q_PROPERTY(int chatFontSize READ chatFontSize WRITE setChatFontSize NOTIFY changed)
+    Q_PROPERTY(int sidebarFontSize READ sidebarFontSize NOTIFY changed)
+    Q_PROPERTY(int codeFontSize READ codeFontSize NOTIFY changed)
+    Q_PROPERTY(QString fontFamily READ fontFamily NOTIFY changed)
+    Q_PROPERTY(QString chatFontFamily READ chatFontFamily NOTIFY changed)
     Q_PROPERTY(QColor bg READ bg NOTIFY changed)
     Q_PROPERTY(QColor sidebar READ sidebar NOTIFY changed)
     Q_PROPERTY(QColor card READ card NOTIFY changed)
@@ -35,6 +39,10 @@ public:
     void setFontSize(int size);
     int chatFontSize() const { return m_chatFontSize; }
     void setChatFontSize(int size);
+    int sidebarFontSize() const { return m_sidebarFontSize; }
+    int codeFontSize() const { return m_codeFontSize; }
+    QString fontFamily() const { return m_fontFamily; }
+    QString chatFontFamily() const { return m_chatFontFamily; }
 
     QColor bg() const { return m_bg; }
     QColor sidebar() const { return m_sidebar; }
@@ -60,6 +68,10 @@ private:
     bool m_dark = false;
     int m_fontSize = 14;
     int m_chatFontSize = 15;
+    int m_sidebarFontSize = 11;
+    int m_codeFontSize = 12;
+    QString m_fontFamily;
+    QString m_chatFontFamily;
     QColor m_bg;
     QColor m_sidebar;
     QColor m_card;

@@ -36,6 +36,8 @@ function conversation_out(array $row): array
         'title' => $row['title'],
         'model' => $row['model'],
         'effort' => $row['effort'],
+        'parent_id' => isset($row['parent_id']) ? (int)$row['parent_id'] : 0,
+        'fork_message_id' => isset($row['fork_message_id']) ? (int)$row['fork_message_id'] : 0,
         'created_at' => $row['created_at'],
         'updated_at' => $row['updated_at'],
     ];
@@ -44,10 +46,17 @@ function conversation_out(array $row): array
 function message_out(array $row): array
 {
     $attachments = [];
+    $sources = [];
     if (!empty($row['attachments_json'])) {
         $decoded = json_decode((string)$row['attachments_json'], true);
         if (is_array($decoded)) {
             $attachments = $decoded;
+        }
+    }
+    if (!empty($row['sources_json'])) {
+        $decoded = json_decode((string)$row['sources_json'], true);
+        if (is_array($decoded)) {
+            $sources = $decoded;
         }
     }
     return [
@@ -58,6 +67,7 @@ function message_out(array $row): array
         'reasoning' => $row['reasoning'],
         'model' => $row['model'],
         'attachments' => $attachments,
+        'sources' => $sources,
         'prompt_tokens' => (int)$row['prompt_tokens'],
         'completion_tokens' => (int)$row['completion_tokens'],
         'cached_tokens' => (int)$row['cached_tokens'],
@@ -112,6 +122,8 @@ function handle_routes(Db $db, array $config, array $user, string $method,
                 'GET /conversations', 'POST /conversations',
                 'PUT|DELETE /conversations/{id}',
                 'POST /conversations/{id}/truncate',
+                'POST /conversations/{id}/branch',
+                'GET|POST /project-memories', 'PUT|DELETE /project-memories/{id}',
                 'GET /search',
                 'GET /messages', 'POST /messages',
                 'GET|POST /commands', 'PUT|DELETE /commands/{id}',
@@ -285,6 +297,92 @@ function handle_routes(Db $db, array $config, array $user, string $method,
         ), 201);
     }
 
+    if (preg_match('#^/conversations/(\d+)/branch$#', $path, $m)) {
+        if ($method !== 'POST') {
+            fail(405, 'Método não permitido.');
+        }
+        $sourceId = (int)$m[1];
+        $source = conversation_owned($db, $sourceId, (int)$user['id']);
+        $throughId = (int)($body['through_message_id'] ?? 0);
+        if ($throughId < -1) {
+            fail(422, 'Mensagem da ramificação inválida.');
+        }
+        if ($throughId > 0) {
+            $message = $db->one('SELECT id FROM messages WHERE id = ? AND conversation_id = ?',
+                                [$throughId, $sourceId]);
+            if (!$message) {
+                fail(422, 'Mensagem da ramificação não encontrada.');
+            }
+        }
+        $defaultTitle = mb_substr((string)$source['title'], 0, 238) . ' (ramificação)';
+        $title = trim((string)($body['title'] ?? $defaultTitle));
+        if ($title === '' || mb_strlen($title) > 255) {
+            fail(422, 'Título inválido.');
+        }
+        $db->pdo()->beginTransaction();
+        try {
+            $db->q('INSERT INTO conversations (user_id, project_id, title, model, effort, parent_id, fork_message_id)'
+                   . ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+                   [$user['id'], $source['project_id'], $title, $source['model'],
+                    $source['effort'], $sourceId, $throughId > 0 ? $throughId : null]);
+            $newId = $db->id();
+            $db->q('INSERT INTO messages (conversation_id, role, content, reasoning, attachments_json,'
+                   . ' sources_json, model, prompt_tokens, completion_tokens, cached_tokens, created_at)'
+                   . ' SELECT ?, role, content, reasoning, attachments_json, sources_json, model,'
+                   . ' 0, 0, 0, created_at FROM messages'
+                   . ' WHERE conversation_id = ?'
+                   . ($throughId > 0 ? ' AND id <= ?' : ($throughId === -1 ? ' AND 1 = 0' : ''))
+                   . ' ORDER BY id ASC',
+                   $throughId > 0 ? [$newId, $sourceId, $throughId] : [$newId, $sourceId]);
+            $db->pdo()->commit();
+        } catch (Throwable $e) {
+            $db->pdo()->rollBack();
+            throw $e;
+        }
+        json_out(conversation_out(conversation_owned($db, $newId, (int)$user['id'])), 201);
+    }
+
+    if ($path === '/project-memories') {
+        $projectId = (int)(($method === 'GET' ? $_GET : $body)['project_id'] ?? 0);
+        project_owned($db, $projectId, (int)$user['id']);
+        if ($method === 'GET') {
+            json_out($db->all('SELECT * FROM project_memories WHERE project_id = ? ORDER BY updated_at DESC, id DESC',
+                              [$projectId]));
+        }
+        if ($method === 'POST') {
+            $content = trim((string)($body['content'] ?? ''));
+            if ($content === '' || mb_strlen($content) > 2000) {
+                fail(422, 'Memória deve conter de 1 a 2000 caracteres.');
+            }
+            $db->q('INSERT INTO project_memories (project_id, content) VALUES (?, ?)',
+                   [$projectId, $content]);
+            json_out($db->one('SELECT * FROM project_memories WHERE id = ?', [$db->id()]), 201);
+        }
+        fail(405, 'Método não permitido.');
+    }
+
+    if (preg_match('#^/project-memories/(\d+)$#', $path, $m)) {
+        $id = (int)$m[1];
+        $memory = $db->one('SELECT pm.* FROM project_memories pm JOIN projects p ON p.id = pm.project_id'
+                           . ' WHERE pm.id = ? AND p.user_id = ?', [$id, $user['id']]);
+        if (!$memory) {
+            fail(404, 'Memória não encontrada.');
+        }
+        if ($method === 'PUT') {
+            $content = trim((string)($body['content'] ?? ''));
+            if ($content === '' || mb_strlen($content) > 2000) {
+                fail(422, 'Memória deve conter de 1 a 2000 caracteres.');
+            }
+            $db->q('UPDATE project_memories SET content = ? WHERE id = ?', [$content, $id]);
+            json_out($db->one('SELECT * FROM project_memories WHERE id = ?', [$id]));
+        }
+        if ($method === 'DELETE') {
+            $db->q('DELETE FROM project_memories WHERE id = ?', [$id]);
+            json_out(['ok' => true]);
+        }
+        fail(405, 'Método não permitido.');
+    }
+
     if (preg_match('#^/conversations/(\d+)$#', $path, $m)) {
         $id = (int)$m[1];
         $conversation = conversation_owned($db, $id, (int)$user['id']);
@@ -328,6 +426,7 @@ function handle_routes(Db $db, array $config, array $user, string $method,
         }
 
         if ($method === 'DELETE') {
+            $db->q('UPDATE conversations SET parent_id = NULL WHERE parent_id = ?', [$id]);
             $db->q('DELETE FROM conversations WHERE id = ?', [$id]);
             $db->q('INSERT INTO activities (user_id, action, details) VALUES (?, ?, ?)',
                    [$user['id'], 'delete_conversation', (string)$conversation['title']]);

@@ -7,13 +7,13 @@ Button {
     property bool primary: false
     property bool danger: false
     property bool ghost: false
-    property int cornerRadius: 10
+    property int cornerRadius: 9
 
-    implicitHeight: 36
+    implicitHeight: Math.max(36, contentItem.implicitHeight + topPadding + bottomPadding)
     leftPadding: 12
     rightPadding: 12
-    topPadding: 6
-    bottomPadding: 6
+    topPadding: 7
+    bottomPadding: 7
     spacing: 7
 
     icon.width: 18
@@ -22,8 +22,11 @@ Button {
 
     palette.buttonText: primary ? "#ffffff" : (danger ? theme.danger : theme.text)
     font.pointSize: theme.fontSize
+    font.family: theme.fontFamily
 
     hoverEnabled: true
+    opacity: enabled ? 1.0 : 0.45
+    Accessible.name: text.length > 0 ? text : ToolTip.text
 
     background: Rectangle {
         radius: control.cornerRadius
@@ -39,7 +42,7 @@ Button {
                 return theme.dark ? "#3a3a3a" : "#e5e7eb"
             return control.hovered ? (theme.dark ? "#333333" : "#f3f4f6") : theme.card
         }
-        border.width: (control.primary || control.ghost) ? 0 : 1
+        border.width: control.primary ? 0 : 1
         border.color: theme.border
 
         Behavior on color {

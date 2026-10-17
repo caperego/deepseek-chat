@@ -22,6 +22,12 @@ Dialog {
                                 : (settings.theme === "system" ? 2 : 0)
         fontSpin.value = settings.fontSize
         chatFontSpin.value = settings.chatFontSize
+        sidebarFontSpin.value = settings.sidebarFontSize
+        codeFontSpin.value = settings.codeFontSize
+        uiFamilyCombo.currentIndex = Math.max(0, uiFamilyCombo.model.indexOf(settings.fontFamily))
+        chatFamilyCombo.currentIndex = Math.max(0, chatFamilyCombo.model.indexOf(settings.chatFontFamily))
+        uiFamilyCombo.editText = settings.fontFamily
+        chatFamilyCombo.editText = settings.chatFontFamily
         enterToSendCheck.checked = settings.enterToSend
         showReasoningCheck.checked = settings.showReasoning
         notifyCheck.checked = settings.notifyOnFinish
@@ -57,6 +63,10 @@ Dialog {
                      : (themeCombo.currentIndex === 2 ? "system" : "light"),
             "fontSize": fontSpin.value,
             "chatFontSize": chatFontSpin.value,
+            "sidebarFontSize": sidebarFontSpin.value,
+            "codeFontSize": codeFontSpin.value,
+            "fontFamily": uiFamilyCombo.editText,
+            "chatFontFamily": chatFamilyCombo.editText,
             "enterToSend": enterToSendCheck.checked,
             "showReasoning": showReasoningCheck.checked,
             "notifyOnFinish": notifyCheck.checked,
@@ -120,7 +130,20 @@ Dialog {
                             model: ["Claro (estilo ChatGPT)", "Escuro", "Sistema (padrão do SO)"]
                         }
 
-                        Text { text: "Fonte da interface:"; color: theme.text }
+                        Text {
+                            Layout.columnSpan: 2
+                            text: "Tipografia por área"
+                            color: theme.text
+                            font.bold: true
+                        }
+                        Text { text: "Família dos menus:"; color: theme.text }
+                        ComboBox {
+                            id: uiFamilyCombo
+                            editable: true
+                            Layout.fillWidth: true
+                            model: Qt.fontFamilies()
+                        }
+                        Text { text: "Menus e diálogos (pt):"; color: theme.text }
                         SpinBox {
                             id: fontSpin
                             from: 9
@@ -128,12 +151,41 @@ Dialog {
                             Layout.preferredWidth: 120
                         }
 
-                        Text { text: "Fonte do chat:"; color: theme.text }
+                        Text { text: "Projetos e conversas (pt):"; color: theme.text }
+                        SpinBox {
+                            id: sidebarFontSpin
+                            from: 9
+                            to: 22
+                            Layout.preferredWidth: 120
+                        }
+                        Text { text: "Família das mensagens:"; color: theme.text }
+                        ComboBox {
+                            id: chatFamilyCombo
+                            editable: true
+                            Layout.fillWidth: true
+                            model: Qt.fontFamilies()
+                        }
+                        Text { text: "Mensagens e escrita (pt):"; color: theme.text }
                         SpinBox {
                             id: chatFontSpin
                             from: 9
                             to: 28
                             Layout.preferredWidth: 120
+                        }
+                        Text { text: "Código e saídas (pt):"; color: theme.text }
+                        SpinBox {
+                            id: codeFontSpin
+                            from: 9
+                            to: 28
+                            Layout.preferredWidth: 120
+                        }
+                        Text {
+                            Layout.columnSpan: 2
+                            Layout.fillWidth: true
+                            text: "Cada tamanho altera apenas sua área. Arraste a divisória lateral para ajustar a largura; use ‹ para recolher a navegação."
+                            color: theme.muted
+                            wrapMode: Text.Wrap
+                            font.pointSize: 10
                         }
 
                         Item {}
@@ -171,7 +223,7 @@ Dialog {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 120
 
-                            TextArea {
+                            CopyableTextArea {
                                 id: globalInstructionsArea
                                 wrapMode: TextArea.Wrap
                                 placeholderText: "Ex.: responda sempre em português; prefiro respostas curtas."
@@ -765,7 +817,7 @@ Dialog {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 160
 
-                TextArea {
+                CopyableTextArea {
                     id: globalCommandPrompt
                     wrapMode: TextArea.Wrap
                     placeholderText: "prompt"

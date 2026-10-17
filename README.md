@@ -16,22 +16,29 @@ Autor: **Carlos Alberto Perego** — [carlos.pw](https://carlos.pw)
   código com realce, links clicáveis e imagens inline).
 - Anexos de texto, imagens (miniatura no composer), PDF/DOCX/ODT (extração de texto),
   colar (Ctrl+V) e arrastar-e-soltar.
-- Copiar, copiar código, **editar mensagem** (trunca o que vem depois e reenvia) e
-  **regenerar** resposta.
+- Copiar, copiar código, **editar mensagem**, **regenerar** e **ramificar** uma conversa
+  a partir de qualquer mensagem, preservando a versão original.
+- Captura de uma área da tela ou da janela do aplicativo para anexar à mensagem.
 - **Várias conversas processando em paralelo**, cada uma com indicador próprio.
 - Fila de mensagens, títulos automáticos e compactação de contexto.
 
 **Organização**
 - Projetos com pasta de trabalho, instruções (system prompt), arquivos e comandos `/`.
+- Memórias editáveis por projeto, reutilizadas nas próximas conversas daquele projeto.
 - Pasta do projeto lida direto do disco, com "Alterar pasta" na hora.
 - Busca no título e **no conteúdo** das conversas.
 - Exportar conversa em Markdown; painel de custos + **saldo DeepSeek**; atividades.
+- Painel de arquivos com edição, prévia de Markdown/HTML/SVG, comparação de alterações
+  e restauração de versões anteriores.
+
+A prévia HTML usa o texto rico do Qt e não executa JavaScript nem CSS avançado.
 
 **Agente (ferramentas)**
 - Arquivos: `list_files`, `read_file`, `write_file`, `find_files`, `grep_files`,
   `restore_file` (backup automático das gravações).
-- Sistema/Internet: `run_command`, `download_file`, `fetch_url`, `browse_url`
-  (Edge/Chrome headless com fallback).
+- Sistema/Internet: `run_command`, `download_file`, `search_web`, `fetch_url`,
+  `browse_url` (Edge/Chrome headless com fallback). Páginas consultadas aparecem
+  com link e trecho junto à resposta.
 - **MCP** (Model Context Protocol, stdio): tools, resources e prompts de servidores
   configurados em `mcp.json`.
 - **Permissões por projeto**: *Solicitar aprovação*, *Aprovar por mim* e
@@ -116,6 +123,9 @@ Passo a passo completo (dependências por sistema, áudio, troubleshooting):
 2. Crie `config.php` (baseado em `config.example.php`) com banco, chave DeepSeek e,
    opcionalmente, outros provedores OpenAI-compatíveis.
 3. Aplique o schema de `deepseek-chat/sql/setup.sql` + `deepseek-api/sql/api_tokens.sql`.
+   Em uma instalação existente, aplique apenas
+   `deepseek-api/sql/2026-09-28-chat-features.sql` antes de usar ramificações,
+   memórias e fontes das respostas.
 4. Teste: `curl https://SEU_DOMINIO/deepseek/health`.
 
 ## Configuração do app

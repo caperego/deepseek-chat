@@ -327,12 +327,36 @@ function deepseek_chat_stream(Db $db, array $config, array $user, array $body): 
     }
 
     if ($persist && ($content !== '' || (!$hasToolCalls && $reasoning !== ''))) {
+        $sources = [];
+        $submittedSources = $body['sources'] ?? [];
+        if (!is_array($submittedSources)) {
+            $submittedSources = [];
+        }
+        foreach ($submittedSources as $source) {
+            if (count($sources) >= 12) {
+                break;
+            }
+            if (!is_array($source)) {
+                continue;
+            }
+            $url = (string)($source['url'] ?? '');
+            if (strlen($url) > 2048 || !filter_var($url, FILTER_VALIDATE_URL)
+                || !in_array(parse_url($url, PHP_URL_SCHEME), ['http', 'https'], true)) {
+                continue;
+            }
+            $sources[] = [
+                'url' => $url,
+                'title' => mb_substr((string)($source['title'] ?? ''), 0, 200),
+                'excerpt' => mb_substr((string)($source['excerpt'] ?? ''), 0, 500),
+            ];
+        }
         $db->q(
             'INSERT INTO messages (conversation_id, role, content, reasoning, model,'
-            . ' prompt_tokens, completion_tokens, cached_tokens)'
-            . ' VALUES (?, "assistant", ?, ?, ?, ?, ?, ?)',
+            . ' prompt_tokens, completion_tokens, cached_tokens, sources_json)'
+            . ' VALUES (?, "assistant", ?, ?, ?, ?, ?, ?, ?)',
             [$conversationId, $content, $reasoning, $model,
-             $promptTokens, $completionTokens, $cachedTokens]
+             $promptTokens, $completionTokens, $cachedTokens,
+             $sources ? json_encode($sources, JSON_UNESCAPED_UNICODE) : null]
         );
         $db->q('UPDATE conversations SET updated_at = NOW() WHERE id = ?', [$conversationId]);
         $db->q(

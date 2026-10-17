@@ -32,6 +32,8 @@
         <file>resources/icons/chart.svg</file>
         <file>qml/main.qml</file>
         <file>qml/AppButton.qml</file>
+        <file>qml/CopyableTextArea.qml</file>
+        <file>qml/CopyableTextEdit.qml</file>
         <file>qml/LoginView.qml</file>
         <file>qml/MainView.qml</file>
         <file>qml/Sidebar.qml</file>

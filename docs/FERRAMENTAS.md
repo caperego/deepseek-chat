@@ -13,6 +13,7 @@
 | `run_command` | `command`, `cwd?`, `timeout_seconds?` | executa no `cmd.exe` (Windows) ou `/bin/sh` |
 | `download_file` | `url`, `path` | baixa arquivo (até 256 MB) |
 | `fetch_url` | `url` | baixa e converte página em texto |
+| `search_web` | `query` | pesquisa resultados web via RSS do Bing; páginas devem ser abertas antes de citar |
 | `browse_url` | `url` | página via navegador **headless** (Edge/Chrome; fallback `fetch_url`) |
 | `mcp__servidor__*` | conforme o servidor MCP | ferramentas, resources e prompts MCP |
 

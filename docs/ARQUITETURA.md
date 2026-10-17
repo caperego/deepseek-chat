@@ -77,8 +77,9 @@
 
 ## Banco de dados (MariaDB)
 
-`users`, `projects` (com `permission_mode`), `project_items`, `commands`,
-`conversations`, `messages` (conteúdo, raciocínio, tokens, `attachments_json`) e
+`users`, `projects` (com `permission_mode`), `project_memories`, `project_items`,
+`commands`, `conversations` (com origem da ramificação), `messages` (conteúdo,
+raciocínio, tokens, `attachments_json` e `sources_json`) e
 `activities`. `api_tokens` guarda os hashes dos tokens do backend.
 Fonte: `deepseek-chat/sql/setup.sql` e `deepseek-api/sql/api_tokens.sql`.
 

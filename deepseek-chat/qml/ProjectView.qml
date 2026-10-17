@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 Item {
     id: view
+    property int editingMemoryId: 0
 
     function loadFields() {
         nameField.text = app.activeProjectName
@@ -18,6 +19,8 @@ Item {
             projectEffortCombo.currentIndex = effortIndex
         var permissionIndex = ["ask", "auto", "full"].indexOf(app.activeProjectPermissionMode)
         projectPermissionCombo.currentIndex = permissionIndex >= 0 ? permissionIndex : 0
+        editingMemoryId = 0
+        memoryField.text = ""
     }
 
     ColumnLayout {
@@ -68,6 +71,7 @@ Item {
             id: tabs
             Layout.fillWidth: true
 
+            TabButton { text: "Memórias" }
             TabButton { text: "Instruções" }
             TabButton { text: "Arquivos" }
             TabButton { text: "Comandos" }
@@ -86,6 +90,109 @@ Item {
                     spacing: 10
 
                     Text {
+                        Layout.fillWidth: true
+                        text: "Memórias deste projeto entram no contexto das próximas conversas. Salve apenas informações que deseja reutilizar."
+                        color: theme.muted
+                        wrapMode: Text.Wrap
+                    }
+
+                    ScrollView {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 100
+                        CopyableTextArea {
+                            id: memoryField
+                            wrapMode: TextArea.Wrap
+                            placeholderText: "Decisão, preferência ou fato importante deste projeto..."
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        AppButton {
+                            text: view.editingMemoryId > 0 ? "Atualizar memória" : "Adicionar memória"
+                            primary: true
+                            onClicked: {
+                                if (memoryField.text.trim().length === 0)
+                                    return
+                                var saved = view.editingMemoryId > 0
+                                            ? app.updateProjectMemory(view.editingMemoryId, memoryField.text)
+                                            : app.addProjectMemory(memoryField.text)
+                                if (saved) {
+                                    view.editingMemoryId = 0
+                                    memoryField.text = ""
+                                }
+                            }
+                        }
+                        AppButton {
+                            visible: view.editingMemoryId > 0
+                            text: "Cancelar edição"
+                            ghost: true
+                            onClicked: {
+                                view.editingMemoryId = 0
+                                memoryField.text = ""
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    ListView {
+                        id: memoriesList
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: 6
+                        model: app.projectMemories
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: memoriesList.width
+                            height: Math.max(64, memoryText.implicitHeight + 20)
+                            radius: 8
+                            color: theme.card
+                            border.color: theme.border
+
+                            Text {
+                                id: memoryText
+                                anchors.left: parent.left
+                                anchors.right: memoryActions.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 8
+                                text: modelData.content
+                                color: theme.text
+                                wrapMode: Text.Wrap
+                            }
+                            RowLayout {
+                                id: memoryActions
+                                anchors.right: parent.right
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                AppButton {
+                                    text: "Editar"
+                                    ghost: true
+                                    onClicked: {
+                                        view.editingMemoryId = modelData.id
+                                        memoryField.text = modelData.content
+                                    }
+                                }
+                                AppButton {
+                                    text: "Excluir"
+                                    danger: true
+                                    ghost: true
+                                    onClicked: app.deleteProjectMemory(modelData.id)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item {
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 18
+                    spacing: 10
+
+                    Text {
                         text: "Instruções enviadas como system prompt em toda conversa deste projeto."
                         color: theme.muted
                         wrapMode: Text.Wrap
@@ -96,7 +203,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
 
-                        TextArea {
+                        CopyableTextArea {
                             id: promptField
                             wrapMode: TextArea.Wrap
                             placeholderText: "Ex.: Você é um assistente especialista em Python. Responda em português."
@@ -195,6 +302,15 @@ Item {
                                     text: "Anexar"
                                     icon.source: "qrc:/resources/icons/paperclip.svg"
                                     onClicked: app.attachWorkdirFile(modelData.path)
+                                }
+
+                                AppButton {
+                                    visible: !modelData.isDir && modelData.kind !== "image"
+                                    text: "Painel"
+                                    icon.source: "qrc:/resources/icons/eye.svg"
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: "Editar arquivo e consultar prévia, diferenças e versões"
+                                    onClicked: app.openArtifact(modelData.path)
                                 }
 
                                 AppButton {
@@ -527,7 +643,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 160
 
-                TextArea {
+                CopyableTextArea {
                     id: commandPrompt
                     wrapMode: TextArea.Wrap
                     placeholderText: "prompt"

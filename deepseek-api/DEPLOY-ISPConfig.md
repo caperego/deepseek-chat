@@ -15,6 +15,19 @@ Os arquivos já estão em `~/deepseek-api` no servidor (com `config.php` pronto)
 
 ---
 
+## Atualização: ramificações, memórias e fontes
+
+Em instalações existentes, aplique a migração SQL **antes** de publicar a nova API:
+
+```bash
+sudo mariadb deepseek_chat < /home/usuario/deepseek-api/sql/2026-09-28-chat-features.sql
+```
+
+Depois publique os arquivos PHP atualizados pelo procedimento abaixo. Os modelos e
+provedores configurados permanecem como estão.
+
+---
+
 ## 0. Atualização (agente de arquivos / permissões)
 
 O `/chat/stream` agora repassa `tools`/`tool_choice` para a API DeepSeek e não

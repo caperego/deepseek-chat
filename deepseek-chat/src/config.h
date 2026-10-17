@@ -41,12 +41,20 @@ struct UiConfig {
     QString theme = QStringLiteral("light");
     int fontSize = 14;
     int chatFontSize = 15;
+    int sidebarFontSize = 11;
+    int codeFontSize = 12;
+    QString fontFamily = QStringLiteral("Segoe UI");
+    QString chatFontFamily = QStringLiteral("Segoe UI");
+    int sidebarWidth = 284;
+    bool sidebarCollapsed = false;
     bool enterToSend = true;
     bool showReasoning = true;
     QString permissionMode = QStringLiteral("ask");
     QString globalInstructions;
     bool notifyOnFinish = true;
     bool closeToTray = true;
+    QStringList pinnedConversations;
+    QHash<qint64, QStringList> conversationTags;
 };
 
 struct AudioConfig {

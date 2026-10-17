@@ -1,0 +1,15 @@
+USE deepseek_chat;
+
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS parent_id BIGINT NULL;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS fork_message_id BIGINT NULL;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources_json LONGTEXT NULL;
+
+CREATE TABLE IF NOT EXISTS project_memories (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  project_id BIGINT NOT NULL,
+  content TEXT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_memory_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  INDEX idx_memory_project (project_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -9,6 +9,18 @@
 #include <QNetworkRequest>
 #include <QUrl>
 
+namespace {
+QString apiError(const QJsonObject &object)
+{
+    const QJsonValue error = object.value(QStringLiteral("error"));
+    if (error.isString())
+        return error.toString();
+    if (error.isObject())
+        return error.toObject().value(QStringLiteral("message")).toString();
+    return QString();
+}
+}
+
 StreamClient::StreamClient(QObject *parent)
     : QObject(parent),
       m_nam(new QNetworkAccessManager(this))
@@ -20,12 +32,15 @@ void StreamClient::send(qint64 conversationId, qint64 projectId,
                         const QString &effort, bool allowImages,
                         const QVector<Message> &messages,
                         const QJsonArray &tools,
-                        bool persistUser, bool persist)
+                        bool persistUser, bool persist, const QJsonArray &sources)
 {
     if (isStreaming())
         return;
 
     QJsonArray msgs;
+    bool hasToolContext = !tools.isEmpty();
+    for (const Message &message : messages)
+        hasToolContext |= !message.toolCalls.isEmpty();
     QVector<Attachment> lastUserAttachments;
     for (const Message &message : messages) {
         const bool isTool = message.role == QLatin1String("tool");
@@ -47,6 +62,9 @@ void StreamClient::send(qint64 conversationId, qint64 projectId,
         } else {
             object.insert(QStringLiteral("content"), buildContent(message, allowImages));
         }
+        // DeepSeek requires this context on subsequent requests with tools.
+        if (message.role == QLatin1String("assistant") && hasToolContext)
+            object.insert(QStringLiteral("reasoning_content"), message.reasoning);
 
         if (!message.toolCalls.isEmpty()) {
             QJsonArray calls;
@@ -76,6 +94,8 @@ void StreamClient::send(qint64 conversationId, qint64 projectId,
     body.insert(QStringLiteral("model"), model);
     body.insert(QStringLiteral("effort"), effort);
     body.insert(QStringLiteral("messages"), msgs);
+    if (!sources.isEmpty())
+        body.insert(QStringLiteral("sources"), sources);
     if (!tools.isEmpty()) {
         body.insert(QStringLiteral("tools"), tools);
         body.insert(QStringLiteral("tool_choice"), QStringLiteral("auto"));
@@ -117,7 +137,11 @@ void StreamClient::send(qint64 conversationId, qint64 projectId,
     m_completionTokens = 0;
     m_cachedTokens = 0;
     m_buffer.clear();
+    m_responsePrefix.clear();
     m_currentEvent.clear();
+    m_streamError.clear();
+    m_finishReason.clear();
+    m_done = false;
     m_cancelled = false;
 
     m_reply = m_nam->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
@@ -191,7 +215,9 @@ void StreamClient::onReadyRead()
 {
     if (!m_reply)
         return;
-    m_buffer.append(m_reply->readAll());
+    const QByteArray chunk = m_reply->readAll();
+    m_responsePrefix.append(chunk.left(qMax(0, 65536 - int(m_responsePrefix.size()))));
+    m_buffer.append(chunk);
     processBuffer();
 }
 
@@ -202,19 +228,30 @@ void StreamClient::processBuffer()
         QByteArray line = m_buffer.left(index).trimmed();
         m_buffer.remove(0, index + 1);
 
-        if (line.isEmpty())
+        if (line.isEmpty()) {
+            m_currentEvent.clear();
             continue;
+        }
 
         if (line.startsWith(QByteArrayLiteral("event:"))) {
             m_currentEvent = QString::fromUtf8(line.mid(6)).trimmed();
             continue;
         }
 
-        if (!line.startsWith(QByteArrayLiteral("data:")))
+        if (!line.startsWith(QByteArrayLiteral("data:"))) {
+            // Some upstream HTTP errors arrive as raw JSON inside the SSE proxy.
+            const QString detail = apiError(QJsonDocument::fromJson(line).object());
+            if (!detail.isEmpty())
+                m_streamError = detail;
             continue;
+        }
 
         const QByteArray payload = line.mid(5).trimmed();
-        if (payload.isEmpty() || payload == QByteArrayLiteral("[DONE]"))
+        if (payload == QByteArrayLiteral("[DONE]")) {
+            m_done = true;
+            continue;
+        }
+        if (payload.isEmpty())
             continue;
 
         QJsonParseError parseError;
@@ -223,6 +260,13 @@ void StreamClient::processBuffer()
             continue;
 
         const QJsonObject object = doc.object();
+
+        const QString detail = apiError(object);
+        if (m_currentEvent == QLatin1String("error") || !detail.isEmpty()) {
+            m_streamError = detail.isEmpty()
+                ? QStringLiteral("O servidor interrompeu a resposta.") : detail;
+            continue;
+        }
 
         if (m_currentEvent == QLatin1String("meta")) {
             m_currentEvent.clear();
@@ -248,8 +292,11 @@ void StreamClient::processBuffer()
         if (choices.isEmpty())
             continue;
 
-        const QJsonObject delta = choices.first().toObject()
-                                      .value(QStringLiteral("delta")).toObject();
+        const QJsonObject choice = choices.first().toObject();
+        const QString reason = choice.value(QStringLiteral("finish_reason")).toString();
+        if (!reason.isEmpty())
+            m_finishReason = reason;
+        const QJsonObject delta = choice.value(QStringLiteral("delta")).toObject();
 
         const QJsonValue reasoning = delta.value(QStringLiteral("reasoning_content"));
         if (reasoning.isString()) {
@@ -300,9 +347,13 @@ void StreamClient::onReplyFinished()
     const QNetworkReply::NetworkError netError = reply->error();
     const QByteArray extra = reply->readAll();
     if (!extra.isEmpty()) {
+        m_responsePrefix.append(extra.left(qMax(0, 65536 - int(m_responsePrefix.size()))));
         m_buffer.append(extra);
-        processBuffer();
     }
+    // Flush a final SSE/JSON line even when the peer omitted its newline.
+    if (!m_buffer.isEmpty() && !m_buffer.endsWith('\n'))
+        m_buffer.append('\n');
+    processBuffer();
     const QString netErrorText = reply->errorString();
     reply->deleteLater();
 
@@ -314,32 +365,48 @@ void StreamClient::onReplyFinished()
         return;
     }
 
-    if (netError != QNetworkReply::NoError && m_fullText.isEmpty() && m_fullReasoning.isEmpty()) {
-        QString detail = netErrorText;
-        const QByteArray trimmed = extra.trimmed();
-        if (!trimmed.isEmpty()) {
-            const QJsonDocument doc = QJsonDocument::fromJson(trimmed);
-            if (doc.isObject()) {
-                const QString apiMessage = doc.object()
-                                               .value(QStringLiteral("error")).toString();
-                if (!apiMessage.isEmpty())
-                    detail = apiMessage;
+    QString failure = m_streamError;
+    if (failure.isEmpty())
+        failure = apiError(QJsonDocument::fromJson(m_responsePrefix).object());
+    if (failure.isEmpty() && netError != QNetworkReply::NoError)
+        failure = QStringLiteral("A conexão foi interrompida: %1").arg(netErrorText);
+    if (failure.isEmpty() && !m_done && m_finishReason.isEmpty())
+        failure = QStringLiteral("A conexão terminou antes de concluir a resposta. "
+                                 "O conteúdo recebido foi mantido; você pode pedir para continuar.");
+    if (failure.isEmpty() && m_finishReason == QLatin1String("length"))
+        failure = QStringLiteral("A resposta atingiu o limite de saída do modelo. "
+                                 "Peça para continuar a partir do trecho recebido.");
+    if (failure.isEmpty() && (m_finishReason == QLatin1String("content_filter")
+        || m_finishReason == QLatin1String("insufficient_system_resource")))
+        failure = QStringLiteral("O modelo interrompeu a resposta (%1). Tente novamente.")
+                      .arg(m_finishReason);
+    if (failure.isEmpty() && m_fullText.trimmed().isEmpty() && m_toolCalls.isEmpty())
+        failure = QStringLiteral("O modelo encerrou sem uma resposta final. Tente novamente.");
+    if (failure.isEmpty()) {
+        for (const ToolCall &call : m_toolCalls) {
+            QJsonParseError parseError;
+            const QJsonDocument args = QJsonDocument::fromJson(call.arguments.toUtf8(), &parseError);
+            if (call.id.isEmpty() || call.name.isEmpty()
+                || parseError.error != QJsonParseError::NoError || !args.isObject()) {
+                failure = QStringLiteral("O modelo enviou uma chamada de ferramenta incompleta. "
+                                         "A ação não foi executada. Tente novamente.");
+                break;
             }
         }
-        reset();
-        emit failed(detail);
-        return;
     }
-
     reset();
     if (m_promptTokens > 0 || m_completionTokens > 0)
         emit usageReceived(m_promptTokens, m_completionTokens, m_cachedTokens);
-    emit finished(m_fullText, m_fullReasoning);
+    if (!failure.isEmpty())
+        emit failed(failure);
+    else
+        emit finished(m_fullText, m_fullReasoning);
 }
 
 void StreamClient::reset()
 {
     m_buffer.clear();
+    m_responsePrefix.clear();
     m_cancelled = false;
     m_currentEvent.clear();
 }

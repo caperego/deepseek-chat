@@ -25,6 +25,10 @@ void QmlTheme::applyFromConfig()
         m_mode = QStringLiteral("light");
     m_fontSize = Config::instance().ui().fontSize;
     m_chatFontSize = Config::instance().ui().chatFontSize;
+    m_sidebarFontSize = Config::instance().ui().sidebarFontSize;
+    m_codeFontSize = Config::instance().ui().codeFontSize;
+    m_fontFamily = Config::instance().ui().fontFamily;
+    m_chatFontFamily = Config::instance().ui().chatFontFamily;
     refresh();
     emit changed();
 }
@@ -71,36 +75,37 @@ void QmlTheme::refresh()
         m_dark = false;
 
     if (m_dark) {
-        m_bg = QColor(QStringLiteral("#212121"));
-        m_sidebar = QColor(QStringLiteral("#171717"));
-        m_card = QColor(QStringLiteral("#2a2a2a"));
-        m_border = QColor(QStringLiteral("#2f2f2f"));
-        m_text = QColor(QStringLiteral("#ececec"));
-        m_muted = QColor(QStringLiteral("#9ca3af"));
-        m_accent = QColor(QStringLiteral("#4D6BFE"));
-        m_userBubble = QColor(QStringLiteral("#303030"));
-        m_systemBubble = QColor(QStringLiteral("#3a3a2f"));
-        m_inputBg = QColor(QStringLiteral("#303030"));
-        m_selected = QColor(QStringLiteral("#2f2f2f"));
+        m_bg = QColor(QStringLiteral("#191a1e"));
+        m_sidebar = QColor(QStringLiteral("#121317"));
+        m_card = QColor(QStringLiteral("#22242a"));
+        m_border = QColor(QStringLiteral("#30323a"));
+        m_text = QColor(QStringLiteral("#f2f3f5"));
+        m_muted = QColor(QStringLiteral("#a6acba"));
+        m_accent = QColor(QStringLiteral("#7181ff"));
+        m_userBubble = QColor(QStringLiteral("#292d3b"));
+        m_systemBubble = QColor(QStringLiteral("#393426"));
+        m_inputBg = QColor(QStringLiteral("#22242a"));
+        m_selected = QColor(QStringLiteral("#2b2e37"));
         m_danger = QColor(QStringLiteral("#f87171"));
     } else {
-        m_bg = QColor(QStringLiteral("#ffffff"));
-        m_sidebar = QColor(QStringLiteral("#f9f9f9"));
+        m_bg = QColor(QStringLiteral("#fdfdfe"));
+        m_sidebar = QColor(QStringLiteral("#f7f8fb"));
         m_card = QColor(QStringLiteral("#ffffff"));
-        m_border = QColor(QStringLiteral("#e5e7eb"));
-        m_text = QColor(QStringLiteral("#0d0d0d"));
-        m_muted = QColor(QStringLiteral("#6b7280"));
-        m_accent = QColor(QStringLiteral("#4D6BFE"));
-        m_userBubble = QColor(QStringLiteral("#f4f4f4"));
+        m_border = QColor(QStringLiteral("#e3e6ed"));
+        m_text = QColor(QStringLiteral("#16181d"));
+        m_muted = QColor(QStringLiteral("#687083"));
+        m_accent = QColor(QStringLiteral("#5667f2"));
+        m_userBubble = QColor(QStringLiteral("#eef1ff"));
         m_systemBubble = QColor(QStringLiteral("#fef3c7"));
-        m_inputBg = QColor(QStringLiteral("#ffffff"));
-        m_selected = QColor(QStringLiteral("#e5e7eb"));
+        m_inputBg = QColor(QStringLiteral("#fbfcff"));
+        m_selected = QColor(QStringLiteral("#e9edff"));
         m_danger = QColor(QStringLiteral("#b91c1c"));
     }
 
     QFont appFont = QGuiApplication::font();
-    if (appFont.pointSize() != m_fontSize) {
+    if (appFont.pointSize() != m_fontSize || appFont.family() != m_fontFamily) {
         appFont.setPointSize(m_fontSize);
+        appFont.setFamily(m_fontFamily);
         QGuiApplication::setFont(appFont);
     }
 }

@@ -11,6 +11,7 @@ ApplicationWindow {
     visible: true
     color: theme.bg
     font.pointSize: theme.fontSize
+    font.family: theme.fontFamily
     title: app.loggedIn
            ? "DeepSeek Chat — " + (app.displayName.length > 0 ? app.displayName : app.userName)
            : "DeepSeek Chat"
@@ -32,9 +33,28 @@ ApplicationWindow {
 
     StackLayout {
         anchors.fill: parent
-        currentIndex: app.loggedIn ? 1 : 0
+        currentIndex: app.loggedIn || app.restoringSession ? 1 : 0
         LoginView {}
-        MainView {}
+        MainView { enabled: !app.restoringSession }
+    }
+
+    Rectangle {
+        visible: app.restoringSession
+        anchors.top: parent.top
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: 12
+        width: loadingLabel.implicitWidth + 28
+        height: loadingLabel.implicitHeight + 20
+        radius: 10
+        color: theme.card
+        border.color: theme.border
+        z: 100
+        Label {
+            id: loadingLabel
+            anchors.centerIn: parent
+            text: "Carregando suas conversas…"
+            color: theme.muted
+        }
     }
 
     Rectangle {

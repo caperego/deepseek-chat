@@ -268,3 +268,20 @@ src/                   núcleo C++ (config, API HTTP, streaming, áudio, control
 ../deepseek-api/       backend PHP (index.php, src/, sql/, config.php)
 ../deepseek-api/DEPLOY-ISPConfig.md
 ```
+# Instalador Linux
+
+Para compilar e gerar o instalador na distribuição atual:
+
+```bash
+bash linux/package.sh
+```
+
+Os arquivos `.run`, `.tar.gz` e os hashes SHA-256 ficam em `dist/`.
+Execute `bash dist/deepseek-chat-1.1.12-linux-x86_64.run` para instalar
+em `~/.local/share/deepseek-chat`, com atalho no menu e em `~/.local/bin`.
+O instalador preserva as configurações nas atualizações e não inclui credenciais
+da máquina de compilação. Configure a URL do backend no aplicativo após instalar.
+
+O pacote utiliza Qt e glibc do sistema. A compilação feita no Manjaro/Arch
+requer bibliotecas compatíveis; para outras distribuições, gere o pacote nelas.
+Consulte o `LEIA-ME.txt` dentro do arquivo `.tar.gz` para dependências e remoção.

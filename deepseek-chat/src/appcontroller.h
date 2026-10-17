@@ -25,6 +25,7 @@ class QSystemTrayIcon;
 class QSocketNotifier;
 class QWindow;
 class QMenu;
+class QPixmap;
 
 class MessageListModel : public QAbstractListModel {
     Q_OBJECT
@@ -40,7 +41,8 @@ public:
         ErrorRole,
         StreamingRole,
         MessageIdRole,
-        DetailRole
+        DetailRole,
+        SourcesRole
     };
 
     explicit MessageListModel(QObject *parent = nullptr);
@@ -74,6 +76,7 @@ private:
         QString detail;
         qint64 id = 0;
         QVariantList attachments;
+        QVariantList sources;
         bool streaming = false;
     };
 
@@ -99,6 +102,7 @@ struct AgentRun {
     int toolIndex = 0;
     QVector<Message> messages;
     QVector<ToolCall> toolQueue;
+    QJsonArray sources;
     ToolCall currentTool;
     QProcess *process = nullptr;
 };
@@ -138,6 +142,7 @@ class AppController : public QObject {
     Q_OBJECT
 
     Q_PROPERTY(bool loggedIn READ loggedIn NOTIFY loggedInChanged)
+    Q_PROPERTY(bool restoringSession READ restoringSession NOTIFY restoringSessionChanged)
     Q_PROPERTY(QString userName READ userName NOTIFY userChanged)
     Q_PROPERTY(QString displayName READ displayName NOTIFY userChanged)
     Q_PROPERTY(QVariantList sidebar READ sidebar NOTIFY sidebarChanged)
@@ -150,6 +155,7 @@ class AppController : public QObject {
     Q_PROPERTY(QVariantList activities READ activities NOTIFY activitiesChanged)
     Q_PROPERTY(MessageListModel *messageModel READ messageModel CONSTANT)
     Q_PROPERTY(qint64 currentConversationId READ currentConversationId NOTIFY currentConversationChanged)
+    Q_PROPERTY(qint64 currentParentId READ currentParentId NOTIFY currentConversationChanged)
     Q_PROPERTY(QVariantList streamingConversationIds READ streamingConversationIds NOTIFY streamingChanged)
     Q_PROPERTY(QVariantList streamingProjectIds READ streamingProjectIds NOTIFY streamingChanged)
     Q_PROPERTY(QString currentTitle READ currentTitle NOTIFY currentConversationChanged)
@@ -173,6 +179,8 @@ class AppController : public QObject {
     Q_PROPERTY(bool enterToSend READ enterToSend NOTIFY uiSettingsChanged)
     Q_PROPERTY(bool showReasoning READ showReasoning NOTIFY uiSettingsChanged)
     Q_PROPERTY(int fontSize READ fontSize NOTIFY uiSettingsChanged)
+    Q_PROPERTY(int sidebarWidth READ sidebarWidth NOTIFY uiSettingsChanged)
+    Q_PROPERTY(bool sidebarCollapsed READ sidebarCollapsed NOTIFY uiSettingsChanged)
     Q_PROPERTY(bool ttsEnabled READ ttsEnabled NOTIFY uiSettingsChanged)
     Q_PROPERTY(bool sttEnabled READ sttEnabled NOTIFY uiSettingsChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
@@ -180,10 +188,12 @@ class AppController : public QObject {
     Q_PROPERTY(QVariantMap usageInfo READ usageInfo NOTIFY usageChanged)
     Q_PROPERTY(QVariantMap balanceInfo READ balanceInfo NOTIFY balanceChanged)
     Q_PROPERTY(QVariantList searchResults READ searchResults NOTIFY searchResultsChanged)
+    Q_PROPERTY(QVariantList projectMemories READ projectMemories NOTIFY projectMemoriesChanged)
     Q_PROPERTY(bool terminalRunning READ terminalRunning NOTIFY terminalChanged)
     Q_PROPERTY(bool artifactVisible READ artifactVisible NOTIFY artifactChanged)
     Q_PROPERTY(QString artifactPath READ artifactPath NOTIFY artifactChanged)
     Q_PROPERTY(QString artifactContent READ artifactContent NOTIFY artifactChanged)
+    Q_PROPERTY(QVariantList artifactVersions READ artifactVersions NOTIFY artifactChanged)
     Q_PROPERTY(QString updateStatus READ updateStatus NOTIFY updateStatusChanged)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateStatusChanged)
 
@@ -196,6 +206,7 @@ public:
     void setWindow(QWindow *window);
 
     bool loggedIn() const { return m_user.id > 0; }
+    bool restoringSession() const { return m_restoringSession; }
     QString userName() const { return m_user.username; }
     QString displayName() const { return m_user.displayName; }
     QVariantList sidebar() const { return m_sidebar; }
@@ -208,6 +219,7 @@ public:
     QVariantList activities() const { return m_activities; }
     MessageListModel *messageModel() { return m_messages; }
     qint64 currentConversationId() const { return m_currentConversationId; }
+    qint64 currentParentId() const { return m_currentParentId; }
     QVariantList streamingConversationIds() const;
     QVariantList streamingProjectIds() const;
     QString currentTitle() const { return m_currentTitle; }
@@ -233,6 +245,8 @@ public:
     bool enterToSend() const;
     bool showReasoning() const;
     int fontSize() const;
+    int sidebarWidth() const;
+    bool sidebarCollapsed() const;
     bool ttsEnabled() const;
     bool sttEnabled() const;
     bool recording() const { return m_recording; }
@@ -240,10 +254,12 @@ public:
     QVariantMap usageInfo() const { return m_usage; }
     QVariantMap balanceInfo() const { return m_balanceInfo; }
     QVariantList searchResults() const { return m_searchResults; }
+    QVariantList projectMemories() const { return m_projectMemories; }
     bool terminalRunning() const;
     bool artifactVisible() const { return !m_artifactPath.isEmpty(); }
     QString artifactPath() const { return m_artifactPath; }
     QString artifactContent() const { return m_artifactContent; }
+    QVariantList artifactVersions() const { return m_artifactVersions; }
     QString updateStatus() const { return m_updateStatus; }
     bool updateAvailable() const { return m_updateAvailable; }
 
@@ -262,6 +278,12 @@ public:
     Q_INVOKABLE void deleteProject(qint64 id);
     Q_INVOKABLE void renameConversation(qint64 id, const QString &title);
     Q_INVOKABLE void deleteConversation(qint64 id);
+    Q_INVOKABLE bool isConversationPinned(qint64 id) const;
+    Q_INVOKABLE void toggleConversationPinned(qint64 id);
+    Q_INVOKABLE QString conversationTags(qint64 id) const;
+    Q_INVOKABLE void setConversationTags(qint64 id, const QString &tags);
+    Q_INVOKABLE void branchConversation(qint64 id);
+    Q_INVOKABLE void branchFromMessage(qint64 messageId);
     Q_INVOKABLE void convertConversationToProject(qint64 id);
     Q_INVOKABLE void showChatView();
 
@@ -270,12 +292,18 @@ public:
     Q_INVOKABLE void refreshModels();
 
     Q_INVOKABLE void attachFiles();
+    Q_INVOKABLE void captureScreenRegion();
+    Q_INVOKABLE void captureAppWindow();
     Q_INVOKABLE bool pasteClipboard();
     Q_INVOKABLE void attachDroppedUrls(const QVariantList &urls);
     Q_INVOKABLE void removeAttachment(int index);
     Q_INVOKABLE void clearAttachments();
     Q_INVOKABLE void addProjectFiles();
     Q_INVOKABLE void removeProjectItem(qint64 id);
+    Q_INVOKABLE bool addProjectMemory(const QString &content);
+    Q_INVOKABLE bool updateProjectMemory(qint64 id, const QString &content);
+    Q_INVOKABLE void deleteProjectMemory(qint64 id);
+    Q_INVOKABLE void rememberMessage(qint64 messageId);
     Q_INVOKABLE void attachProjectItem(qint64 id);
     Q_INVOKABLE void openWorkdir();
 
@@ -298,6 +326,7 @@ public:
                                     const QString &newPassword);
     Q_INVOKABLE void openConfigFile();
     Q_INVOKABLE QVariantMap currentSettings() const;
+    Q_INVOKABLE void saveNavigationLayout(int width, bool collapsed);
     Q_INVOKABLE QString chooseDirectory(const QString &title);
     Q_INVOKABLE void refreshWorkdirFiles();
     Q_INVOKABLE void attachWorkdirFile(const QString &path);
@@ -322,6 +351,9 @@ public:
     Q_INVOKABLE void openArtifact(const QString &path);
     Q_INVOKABLE void closeArtifact();
     Q_INVOKABLE void saveArtifact(const QString &content);
+    Q_INVOKABLE void restoreArtifactVersion(const QString &versionPath);
+    Q_INVOKABLE QString artifactDiff(const QString &edited) const;
+    Q_INVOKABLE QString artifactPreviewUrl(const QString &edited) const;
     Q_INVOKABLE void reloadMcp();
     Q_INVOKABLE void openMcpFile();
 
@@ -332,10 +364,12 @@ public:
     Q_INVOKABLE void stopRecording();
     Q_INVOKABLE void refreshUsage();
     Q_INVOKABLE void refreshBalance();
+    Q_INVOKABLE QString estimateMessageCost(const QString &text) const;
     Q_INVOKABLE void restoreWindow();
 
 signals:
     void loggedInChanged();
+    void restoringSessionChanged();
     void userChanged();
     void sidebarChanged();
     void projectsChanged();
@@ -363,6 +397,7 @@ signals:
                            const QString &diff);
     void approvalClosed();
     void searchResultsChanged();
+    void projectMemoriesChanged();
     void terminalOutput(const QString &text);
     void terminalChanged();
     void artifactChanged();
@@ -374,6 +409,8 @@ private:
     void rebuildSidebar();
     void rebuildProjects();
     void loadProjectDetails(qint64 projectId);
+    void refreshProjectMemories();
+    void refreshArtifactVersions();
     void loadGlobalCommands();
     void fillModels(const QVector<ModelInfo> &models);
     void updateEfforts();
@@ -385,6 +422,7 @@ private:
     void configureTts();
     void transcribeRecording(const QString &file);
     bool addAttachmentPath(const QString &path);
+    void attachCapturedPixmap(const QPixmap &pixmap);
     QString permissionMode() const;
     QString agentContextText() const;
     static QString folderNameForTitle(const QString &title);
@@ -398,6 +436,7 @@ private:
     void onRunFinished(AgentRun *run, const QString &fullText,
                        const QString &fullReasoning);
     void finishRun(AgentRun *run, const QString &fullText, const QString &fullReasoning);
+    void failRun(AgentRun *run, const QString &error);
     void handleToolCalls(AgentRun *run, const QVector<ToolCall> &calls);
     void runNextTool(AgentRun *run);
     void executeToolCall(AgentRun *run, const ToolCall &call);
@@ -405,6 +444,7 @@ private:
     void finishToolCall(AgentRun *run, const QString &result, const QString &summary);
     void fetchUrl(AgentRun *run, const ToolCall &call);
     void browseUrl(AgentRun *run, const ToolCall &call);
+    void searchWeb(AgentRun *run, const ToolCall &call);
     void downloadFile(AgentRun *run, const ToolCall &call);
     void runCommand(AgentRun *run, const ToolCall &call);
     void maybeQueueNext(qint64 conversationId);
@@ -457,6 +497,7 @@ private:
     static QVariantMap commandMap(const Command &command);
 
     User m_user;
+    bool m_restoringSession = false;
     ApiClient *m_api = nullptr;
     QmlTheme *m_theme = nullptr;
     MessageListModel *m_messages = nullptr;
@@ -491,6 +532,8 @@ private:
     bool m_approvalShown = false;
     int m_approvalId = 0;
     QVariantList m_searchResults;
+    QVariantList m_projectMemories;
+    QVariantList m_artifactVersions;
     QHash<qint64, QString> m_queuedText;
     QSet<qint64> m_titlePending;
     QHash<qint64, QString> m_compaction;
@@ -519,6 +562,7 @@ private:
     Project m_activeProject;
     qint64 m_activeProjectId = 0;
     qint64 m_currentConversationId = 0;
+    qint64 m_currentParentId = 0;
     QString m_currentTitle;
     QString m_currentModel;
     QString m_currentEffort;

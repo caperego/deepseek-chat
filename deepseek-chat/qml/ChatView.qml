@@ -25,8 +25,8 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            height: 54
-            color: theme.bg
+            height: Math.max(62, theme.fontSize * 2 + 28)
+            color: theme.card
 
             Rectangle {
                 width: parent.width
@@ -37,22 +37,32 @@ Item {
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 16
-                anchors.rightMargin: 16
-                spacing: 8
+                anchors.leftMargin: 20
+                anchors.rightMargin: 20
+                spacing: 10
 
                 Text {
                     Layout.fillWidth: true
                     text: app.currentTitle
                     font.bold: true
-                    font.pixelSize: app.currentConversationId > 0 ? 17 : 15
-                    color: app.currentConversationId > 0 ? theme.accent : theme.text
+                    font.pointSize: Math.min(15, theme.fontSize + 1)
+                    font.family: theme.fontFamily
+                    color: theme.text
                     elide: Text.ElideRight
                 }
 
                 AppButton {
+                    visible: app.currentParentId > 0
+                    text: "↶ Retroceder versão"
+                    ghost: true
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Voltar à versão anterior sem apagar esta versão"
+                    onClicked: app.openConversation(app.currentParentId)
+                }
+
+                AppButton {
                     id: usageButton
-                    text: app.usageInfo.costText
+                    text: app.usageInfo.costText || "—"
                     icon.source: "qrc:/resources/icons/chart.svg"
                     ghost: true
                     onClicked: usagePopup.open()
@@ -84,19 +94,19 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text { text: "Custo"; color: theme.muted; Layout.fillWidth: true }
-                                    Text { text: app.usageInfo.costText; color: theme.text; font.bold: true }
+                                    Text { text: app.usageInfo.costText || "—"; color: theme.text; font.bold: true }
                                 }
 
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text { text: "Uso"; color: theme.muted; Layout.fillWidth: true }
-                                    Text { text: app.usageInfo.percentText; color: theme.text; font.bold: true }
+                                    Text { text: app.usageInfo.percentText || "—"; color: theme.text; font.bold: true }
                                 }
 
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text { text: "Tokens"; color: theme.muted; Layout.fillWidth: true }
-                                    Text { text: app.usageInfo.tokensText; color: theme.text; font.bold: true }
+                                    Text { text: app.usageInfo.tokensText || "—"; color: theme.text; font.bold: true }
                                 }
 
                                 Rectangle { Layout.fillWidth: true; height: 1; color: theme.border }
@@ -124,13 +134,13 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text { text: "Total (conta)"; color: theme.muted; Layout.fillWidth: true }
-                                    Text { text: app.usageInfo.totalCostText; color: theme.text; font.bold: true }
+                                    Text { text: app.usageInfo.totalCostText || "—"; color: theme.text; font.bold: true }
                                 }
 
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text { text: "Tokens totais"; color: theme.muted; Layout.fillWidth: true }
-                                    Text { text: app.usageInfo.totalTokensText; color: theme.text }
+                                    Text { text: app.usageInfo.totalTokensText || "—"; color: theme.text }
                                 }
 
                                 Rectangle { Layout.fillWidth: true; height: 1; color: theme.border }
@@ -206,12 +216,27 @@ Item {
             delegate: MessageDelegate {
                 width: messageList.width - 36
             }
+
+            property bool autoScroll: true
+
             onCountChanged: positionViewAtEnd()
+
+            onContentYChanged: {
+                if (messageList.contentHeight - messageList.contentY - messageList.height < 2)
+                    autoScroll = true
+                else if (autoScroll)
+                    autoScroll = false
+            }
+
+            onContentHeightChanged: {
+                if (autoScroll)
+                    positionViewAtEnd()
+            }
         }
 
         Rectangle {
             Layout.fillWidth: true
-            color: theme.bg
+            color: theme.card
             implicitHeight: composer.implicitHeight + 24
 
             Rectangle {
@@ -223,7 +248,9 @@ Item {
             ColumnLayout {
                 id: composer
                 anchors.fill: parent
-                anchors.margins: 12
+                anchors.margins: 14
+                anchors.leftMargin: Math.max(12, (parent.width - 920) / 2)
+                anchors.rightMargin: Math.max(12, (parent.width - 920) / 2)
                 spacing: 8
 
                 Flow {
@@ -375,6 +402,53 @@ Item {
                     }
                 }
 
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(200, Math.max(72,
+                        input.contentHeight + input.topPadding + input.bottomPadding))
+
+                    CopyableTextArea {
+                        id: input
+                        placeholderText: "Escreva sua mensagem…"
+                        wrapMode: TextArea.Wrap
+                        font.pointSize: theme.chatFontSize
+                        font.family: theme.chatFontFamily
+                        onTextChanged: view.updateLinks()
+
+                        background: Rectangle {
+                            radius: 12
+                            color: theme.dark ? "#2a2a2a" : "#f7f7f8"
+                            border.width: composerDrop.containsDrag ? 2 : 1
+                            border.color: composerDrop.containsDrag ? theme.accent : theme.border
+                        }
+
+                        Keys.onPressed: (event) => {
+                            if (event.key === Qt.Key_V
+                                    && (event.modifiers & Qt.ControlModifier)
+                                    && !(event.modifiers & Qt.ShiftModifier)
+                                    && !(event.modifiers & Qt.AltModifier)) {
+                                if (app.pasteClipboard()) {
+                                    event.accepted = true
+                                    return
+                                }
+                            }
+                            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                                var shouldSend = app.enterToSend
+                                        ? !(event.modifiers & Qt.ShiftModifier)
+                                        : (event.modifiers & Qt.ControlModifier)
+                                if (shouldSend) {
+                                    event.accepted = true
+                                    var text = input.text
+                                    if (text.trim().length > 0) {
+                                        input.text = ""
+                                        app.send(text)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
@@ -386,6 +460,43 @@ Item {
                     }
 
                     AppButton {
+                        text: "Capturar"
+                        icon.source: "qrc:/resources/icons/image.svg"
+                        onClicked: captureMenu.popup()
+
+                        Menu {
+                            id: captureMenu
+                            MenuItem {
+                                text: "Selecionar área da tela"
+                                onTriggered: app.captureScreenRegion()
+                            }
+                            MenuItem {
+                                text: "Janela do aplicativo"
+                                onTriggered: app.captureAppWindow()
+                            }
+                        }
+                    }
+
+                    AppButton {
+                        text: ""
+                        icon.source: "qrc:/resources/icons/globe.svg"
+                        ghost: true
+                        implicitWidth: 40
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Pesquisar na web com fontes"
+                        onClicked: {
+                            if (input.text.trim().length > 0) {
+                                var question = input.text
+                                input.text = ""
+                                app.send("Pesquise na web, abra as fontes relevantes e cite os links: " + question)
+                            } else {
+                                input.text = "Pesquise na web, abra as fontes relevantes e cite os links: "
+                                input.forceActiveFocus()
+                            }
+                        }
+                    }
+
+                    AppButton {
                         text: ""
                         icon.source: app.recording
                                      ? "qrc:/resources/icons/stop.svg"
@@ -393,6 +504,8 @@ Item {
                         primary: app.recording
                         danger: app.recording
                         implicitWidth: 40
+                        ToolTip.visible: hovered
+                        ToolTip.text: app.recording ? "Parar gravação" : "Gravar mensagem de voz"
                         onClicked: {
                             if (app.recording)
                                 app.stopRecording()
@@ -406,51 +519,12 @@ Item {
                         icon.source: "qrc:/resources/icons/slash.svg"
                         ghost: true
                         implicitWidth: 40
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Comandos rápidos"
                         onClicked: commandsMenu.popup()
                     }
 
-                    ScrollView {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 84
-
-                        TextArea {
-                            id: input
-                            placeholderText: "Escreva sua mensagem... (Enter envia, Shift+Enter quebra linha)"
-                            wrapMode: TextArea.Wrap
-                            font.pointSize: theme.chatFontSize
-                            onTextChanged: view.updateLinks()
-
-                            background: Rectangle {
-                                radius: 12
-                                color: theme.dark ? "#2a2a2a" : "#f7f7f8"
-                                border.width: composerDrop.containsDrag ? 2 : 1
-                                border.color: composerDrop.containsDrag ? theme.accent : theme.border
-                            }
-
-                            Keys.onPressed: (event) => {
-                                if (event.key === Qt.Key_V
-                                        && (event.modifiers & Qt.ControlModifier)
-                                        && !(event.modifiers & Qt.ShiftModifier)
-                                        && !(event.modifiers & Qt.AltModifier)) {
-                                    if (app.pasteClipboard()) {
-                                        event.accepted = true
-                                        return
-                                    }
-                                }
-                                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                                    var shouldSend = app.enterToSend
-                                            ? !(event.modifiers & Qt.ShiftModifier)
-                                            : (event.modifiers & Qt.ControlModifier)
-                                    if (shouldSend) {
-                                        event.accepted = true
-                                        var text = input.text
-                                        input.text = ""
-                                        app.send(text)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    Item { Layout.fillWidth: true }
 
                     AppButton {
                         text: app.streaming ? "Parar" : "Enviar"
@@ -459,6 +533,7 @@ Item {
                                      : "qrc:/resources/icons/send.svg"
                         primary: !app.streaming
                         danger: app.streaming
+                        enabled: app.streaming || input.text.trim().length > 0
                         onClicked: {
                             if (app.streaming) {
                                 app.stop()
@@ -469,6 +544,17 @@ Item {
                             }
                         }
                     }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: (app.enterToSend ? "Enter envia · Shift+Enter quebra linha"
+                                            : "Ctrl+Enter envia · Enter quebra linha")
+                          + (input.text.trim().length > 0
+                             ? " · " + app.estimateMessageCost(input.text) : "")
+                    color: theme.muted
+                    font.family: theme.fontFamily
+                    font.pointSize: 9
+                    horizontalAlignment: Text.AlignHCenter
                 }
             }
 

@@ -8,7 +8,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
-#include <QSplashScreen>
+#include <QTimer>
 
 int main(int argc, char *argv[])
 {
@@ -25,19 +25,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    QSplashScreen splash(Assets::logoPixmap(320));
-    splash.show();
-    splash.showMessage(QStringLiteral("Conectando à API..."),
-                       Qt::AlignBottom | Qt::AlignHCenter,
-                       QColor(QStringLiteral("#4D6BFE")));
-    app.processEvents();
-
     QmlTheme theme;
     AppController controller;
     controller.setTheme(&theme);
-
-    controller.tryAutoLogin();
-    app.processEvents();
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("app"), &controller);
@@ -48,9 +38,15 @@ int main(int argc, char *argv[])
     if (engine.rootObjects().isEmpty())
         return 1;
 
-    if (auto *window = qobject_cast<QWindow *>(engine.rootObjects().first()))
+    if (auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first())) {
         controller.setWindow(window);
+        // Paint the application before starting requests that use nested event loops.
+        QObject::connect(window, &QQuickWindow::frameSwapped,
+                         &controller, &AppController::tryAutoLogin,
+                         Qt::ConnectionType(Qt::QueuedConnection | Qt::SingleShotConnection));
+    } else {
+        QTimer::singleShot(0, &controller, &AppController::tryAutoLogin);
+    }
 
-    splash.close();
     return app.exec();
 }

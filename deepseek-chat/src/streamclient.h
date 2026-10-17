@@ -25,7 +25,8 @@ public:
               const QString &model, const QString &effort, bool allowImages,
               const QVector<Message> &messages,
               const QJsonArray &tools = QJsonArray(),
-              bool persistUser = true, bool persist = true);
+              bool persistUser = true, bool persist = true,
+              const QJsonArray &sources = QJsonArray());
     void cancel();
     bool isStreaming() const { return m_reply != nullptr; }
     QVector<ToolCall> toolCalls() const { return m_toolCalls; }
@@ -50,15 +51,19 @@ private:
     QNetworkAccessManager *m_nam = nullptr;
     QNetworkReply *m_reply = nullptr;
     QByteArray m_buffer;
+    QByteArray m_responsePrefix;
     QString m_baseUrl;
     QString m_token;
     QString m_currentEvent;
     QString m_fullText;
     QString m_fullReasoning;
+    QString m_streamError;
+    QString m_finishReason;
     QVector<ToolCall> m_toolCalls;
     int m_promptTokens = 0;
     int m_completionTokens = 0;
     int m_cachedTokens = 0;
     bool m_cancelled = false;
+    bool m_done = false;
     int m_timeout = 600000;
 };

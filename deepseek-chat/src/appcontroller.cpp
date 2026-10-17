@@ -11,6 +11,7 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QCryptographicHash>
+#include <QCursor>
 #include <QDataStream>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -21,20 +22,27 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QKeyEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocale>
 #include <QMediaDevices>
+#include <QMouseEvent>
 #include <QMenu>
 #include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPdfDocument>
+#include <QPainter>
+#include <QPixmap>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QSaveFile>
+#include <QScreen>
+#include <QScopeGuard>
 #include <QSharedPointer>
 #include <QSocketNotifier>
 #include <QStandardPaths>
@@ -42,10 +50,15 @@
 #include <QTextToSpeech>
 #include <QTimer>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QVoice>
+#include <QUuid>
+#include <QWidget>
 #include <QWindow>
+#include <QXmlStreamReader>
 
 #include <atomic>
+#include <algorithm>
 #include <memory>
 
 #ifdef Q_OS_WIN
@@ -60,7 +73,7 @@
 
 namespace {
 
-const char *kAppVersion = "1.1.8";
+const char *kAppVersion = "1.1.12";
 const int kMaxAgentRounds = 12;
 const int kMaxListEntries = 500;
 const int kMaxReadBytes = 512 * 1024;
@@ -68,6 +81,88 @@ const int kMaxWriteBytes = 2 * 1024 * 1024;
 const int kMaxFetchBytes = 400 * 1024;
 const int kMaxToolOutput = 100 * 1024;
 const qint64 kMaxDownloadBytes = 256LL * 1024 * 1024;
+
+class ScreenRegionPicker : public QWidget {
+public:
+    ScreenRegionPicker(QScreen *screen, std::function<void(const QPixmap &)> selected)
+        : m_capture(screen->grabWindow(0)), m_selected(std::move(selected))
+    {
+        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
+        setAttribute(Qt::WA_DeleteOnClose);
+        setGeometry(screen->geometry());
+        setCursor(Qt::CrossCursor);
+        setFocusPolicy(Qt::StrongFocus);
+        show();
+        raise();
+        activateWindow();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.drawPixmap(rect(), m_capture);
+        painter.fillRect(rect(), QColor(0, 0, 0, 85));
+        const QRect selected = QRect(m_start, m_end).normalized().intersected(rect());
+        if (m_dragging && selected.width() > 0 && selected.height() > 0) {
+            const qreal sx = qreal(m_capture.width()) / width();
+            const qreal sy = qreal(m_capture.height()) / height();
+            const QRect physical(qRound(selected.x() * sx), qRound(selected.y() * sy),
+                                 qRound(selected.width() * sx), qRound(selected.height() * sy));
+            painter.drawPixmap(selected, m_capture, physical);
+            painter.setPen(QPen(Qt::white, 2));
+            painter.drawRect(selected);
+        }
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        m_start = event->pos();
+        m_end = m_start;
+        m_dragging = true;
+        update();
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (m_dragging) {
+            m_end = event->pos();
+            update();
+        }
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (!m_dragging)
+            return;
+        m_end = event->pos();
+        const QRect selected = QRect(m_start, m_end).normalized().intersected(rect());
+        if (selected.width() >= 8 && selected.height() >= 8) {
+            const qreal sx = qreal(m_capture.width()) / width();
+            const qreal sy = qreal(m_capture.height()) / height();
+            const QRect physical(qRound(selected.x() * sx), qRound(selected.y() * sy),
+                                 qRound(selected.width() * sx), qRound(selected.height() * sy));
+            const QPixmap cropped = m_capture.copy(physical);
+            close();
+            m_selected(cropped);
+            return;
+        }
+        close();
+    }
+
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_Escape)
+            close();
+    }
+
+private:
+    QPixmap m_capture;
+    std::function<void(const QPixmap &)> m_selected;
+    QPoint m_start;
+    QPoint m_end;
+    bool m_dragging = false;
+};
 
 QString formatSize(qint64 bytes)
 {
@@ -622,6 +717,8 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
         return item.id;
     case DetailRole:
         return item.detail;
+    case SourcesRole:
+        return item.sources;
     default:
         return QVariant();
     }
@@ -639,7 +736,8 @@ QHash<int, QByteArray> MessageListModel::roleNames() const
         {ErrorRole, "errorText"},
         {StreamingRole, "streaming"},
         {MessageIdRole, "messageId"},
-        {DetailRole, "detail"}
+        {DetailRole, "detail"},
+        {SourcesRole, "sources"}
     };
 }
 
@@ -653,6 +751,7 @@ void MessageListModel::setMessages(const QVector<Message> &messages)
         item.role = message.role;
         item.content = message.content;
         item.reasoning = message.reasoning;
+        item.sources = message.sources;
         for (const Attachment &a : message.attachments)
             item.attachments.append(a.isImage() ? QStringLiteral("[imagem] ") + a.name
                                                 : a.name);
@@ -781,6 +880,7 @@ AppController::AppController(QObject *parent)
     : QObject(parent),
       m_messages(new MessageListModel(this))
 {
+    m_restoringSession = !Config::instance().api().token.isEmpty();
     m_tts = new QTextToSpeech(this);
     configureTts();
 
@@ -950,6 +1050,7 @@ QVariantMap AppController::conversationMap(const Conversation &c)
     QVariantMap map;
     map.insert(QStringLiteral("id"), c.id);
     map.insert(QStringLiteral("projectId"), c.projectId);
+    map.insert(QStringLiteral("parentId"), c.parentId);
     map.insert(QStringLiteral("title"), c.title);
     map.insert(QStringLiteral("model"), c.model);
     map.insert(QStringLiteral("effort"), c.effort);
@@ -992,6 +1093,12 @@ QVariantMap AppController::commandMap(const Command &command)
 
 void AppController::tryAutoLogin()
 {
+    const auto finishRestoring = qScopeGuard([this] {
+        if (m_restoringSession) {
+            m_restoringSession = false;
+            emit restoringSessionChanged();
+        }
+    });
     if (m_user.id > 0)
         return;
 
@@ -1081,18 +1188,21 @@ void AppController::logout()
     m_projects.clear();
     m_projectItems.clear();
     m_projectCommands.clear();
+    m_projectMemories.clear();
     m_attachments.clear();
     m_workdirFiles.clear();
     m_balanceInfo.clear();
     destroyAllRuns();
     m_activeProject = Project();
     m_activeProjectId = 0;
+    m_currentParentId = 0;
 
     emit loggedInChanged();
     emit sidebarChanged();
     emit projectsChanged();
     emit projectItemsChanged();
     emit projectCommandsChanged();
+    emit projectMemoriesChanged();
     emit attachmentsChanged();
     emit activeProjectChanged();
     emit currentConversationChanged();
@@ -1126,6 +1236,11 @@ void AppController::rebuildSidebar()
         emit toast(QStringLiteral("Erro ao listar conversas: ") + error);
         return;
     }
+    const QStringList pinned = Config::instance().ui().pinnedConversations;
+    std::stable_sort(conversations.begin(), conversations.end(), [&pinned](const Conversation &a,
+                                                                             const Conversation &b) {
+        return pinned.contains(QString::number(a.id)) && !pinned.contains(QString::number(b.id));
+    });
 
     if (!m_projectList.isEmpty()) {
         QVariantMap projectsHeader;
@@ -1149,6 +1264,8 @@ void AppController::rebuildSidebar()
             if (c.projectId != project.id)
                 continue;
             QVariantMap convItem = conversationMap(c);
+            convItem.insert(QStringLiteral("pinned"), pinned.contains(QString::number(c.id)));
+            convItem.insert(QStringLiteral("tags"), Config::instance().ui().conversationTags.value(c.id));
             convItem.insert(QStringLiteral("type"), QStringLiteral("conv"));
             convItem.insert(QStringLiteral("indent"), 1);
             m_sidebar.append(convItem);
@@ -1185,6 +1302,8 @@ void AppController::rebuildSidebar()
         }
 
         QVariantMap convItem = conversationMap(c);
+        convItem.insert(QStringLiteral("pinned"), pinned.contains(QString::number(c.id)));
+        convItem.insert(QStringLiteral("tags"), Config::instance().ui().conversationTags.value(c.id));
         convItem.insert(QStringLiteral("type"), QStringLiteral("conv"));
         convItem.insert(QStringLiteral("indent"), 0);
         m_sidebar.append(convItem);
@@ -1208,6 +1327,7 @@ void AppController::loadProjectDetails(qint64 projectId)
 {
     m_projectItems.clear();
     m_projectCommands.clear();
+    m_projectMemories.clear();
     if (projectId > 0) {
         QVector<ProjectItem> items;
         QString error;
@@ -1220,9 +1340,83 @@ void AppController::loadProjectDetails(qint64 projectId)
             for (const Command &command : commands)
                 m_projectCommands.append(commandMap(command));
         }
+        QString memoryError;
+        if (!m_api->projectMemories(projectId, &m_projectMemories, &memoryError))
+            emit toast(QStringLiteral("Erro ao carregar memórias: ") + memoryError);
     }
     emit projectItemsChanged();
     emit projectCommandsChanged();
+    emit projectMemoriesChanged();
+}
+
+void AppController::refreshProjectMemories()
+{
+    if (m_activeProjectId <= 0) {
+        m_projectMemories.clear();
+        emit projectMemoriesChanged();
+        return;
+    }
+    QVariantList memories;
+    QString error;
+    if (!m_api->projectMemories(m_activeProjectId, &memories, &error)) {
+        emit toast(QStringLiteral("Erro ao carregar memórias: ") + error);
+        return;
+    }
+    m_projectMemories = memories;
+    emit projectMemoriesChanged();
+}
+
+bool AppController::addProjectMemory(const QString &content)
+{
+    if (m_activeProjectId <= 0 || content.trimmed().isEmpty())
+        return false;
+    QString error;
+    if (!m_api->addProjectMemory(m_activeProjectId, content.trimmed(), &error)) {
+        emit toast(QStringLiteral("Erro ao salvar memória: ") + error);
+        return false;
+    }
+    refreshProjectMemories();
+    emit toast(QStringLiteral("Memória salva no projeto."));
+    return true;
+}
+
+bool AppController::updateProjectMemory(qint64 id, const QString &content)
+{
+    if (id <= 0 || content.trimmed().isEmpty())
+        return false;
+    QString error;
+    if (!m_api->updateProjectMemory(id, content.trimmed(), &error)) {
+        emit toast(QStringLiteral("Erro ao editar memória: ") + error);
+        return false;
+    }
+    refreshProjectMemories();
+    return true;
+}
+
+void AppController::deleteProjectMemory(qint64 id)
+{
+    if (id <= 0)
+        return;
+    QString error;
+    if (!m_api->deleteProjectMemory(id, &error)) {
+        emit toast(QStringLiteral("Erro ao excluir memória: ") + error);
+        return;
+    }
+    refreshProjectMemories();
+}
+
+void AppController::rememberMessage(qint64 messageId)
+{
+    if (m_activeProjectId <= 0) {
+        emit toast(QStringLiteral("Abra uma conversa de projeto para salvar uma memória."));
+        return;
+    }
+    for (const Message &message : m_history) {
+        if (message.id == messageId) {
+            addProjectMemory(message.content.trimmed().left(2000));
+            return;
+        }
+    }
 }
 
 void AppController::setActiveProject(qint64 id)
@@ -1337,6 +1531,7 @@ void AppController::setCurrentEffort(const QString &effort)
 void AppController::newConversation(qint64 projectId)
 {
     m_currentConversationId = 0;
+    m_currentParentId = 0;
     m_history.clear();
     m_messages->clearMessages();
     clearAttachments();
@@ -1362,6 +1557,7 @@ void AppController::newConversation(qint64 projectId)
 void AppController::openConversationInternal(qint64 id)
 {
     m_currentConversationId = id;
+    m_currentParentId = 0;
     clearAttachments();
 
     QVector<Message> stored;
@@ -1384,6 +1580,7 @@ void AppController::openConversationInternal(qint64 id)
             if (c.id != id)
                 continue;
             m_currentTitle = c.title;
+            m_currentParentId = c.parentId;
             m_currentModel = c.model;
             m_currentEffort = c.effort;
             setActiveProject(c.projectId);
@@ -1408,6 +1605,7 @@ void AppController::openProject(qint64 id)
 {
     setActiveProject(id);
     m_currentConversationId = 0;
+    m_currentParentId = 0;
     m_currentTitle = m_activeProject.name;
     m_viewMode = 1;
     emit viewModeChanged();
@@ -1552,6 +1750,85 @@ void AppController::deleteConversation(qint64 id)
     rebuildSidebar();
 }
 
+bool AppController::isConversationPinned(qint64 id) const
+{
+    return Config::instance().ui().pinnedConversations.contains(QString::number(id));
+}
+
+void AppController::toggleConversationPinned(qint64 id)
+{
+    if (id <= 0)
+        return;
+    QStringList &pinned = Config::instance().ui().pinnedConversations;
+    const QString key = QString::number(id);
+    if (pinned.contains(key))
+        pinned.removeAll(key);
+    else
+        pinned.prepend(key);
+    QString error;
+    if (!Config::instance().save(&error)) {
+        emit toast(error);
+        return;
+    }
+    rebuildSidebar();
+}
+
+QString AppController::conversationTags(qint64 id) const
+{
+    return Config::instance().ui().conversationTags.value(id).join(QStringLiteral(", "));
+}
+
+void AppController::setConversationTags(qint64 id, const QString &tags)
+{
+    if (id <= 0)
+        return;
+    QStringList values;
+    for (const QString &tag : tags.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString clean = tag.trimmed().left(32);
+        if (!clean.isEmpty() && !values.contains(clean, Qt::CaseInsensitive) && values.size() < 8)
+            values.append(clean);
+    }
+    auto &stored = Config::instance().ui().conversationTags;
+    if (values.isEmpty()) stored.remove(id); else stored.insert(id, values);
+    QString error;
+    if (!Config::instance().save(&error)) { emit toast(error); return; }
+    rebuildSidebar();
+}
+
+void AppController::branchConversation(qint64 id)
+{
+    if (id <= 0 || runFor(id))
+        return;
+    qint64 branchId = 0;
+    QString error;
+    if (!m_api->branchConversation(id, 0, QString(), &branchId, &error)) {
+        emit toast(QStringLiteral("Erro ao ramificar: ") + error);
+        return;
+    }
+    if (m_compaction.contains(id))
+        m_compaction.insert(branchId, m_compaction.value(id));
+    rebuildSidebar();
+    openConversationInternal(branchId);
+    emit toast(QStringLiteral("Ramificação criada. A conversa original foi preservada."));
+}
+
+void AppController::branchFromMessage(qint64 messageId)
+{
+    if (m_currentConversationId <= 0 || messageId <= 0
+        || runFor(m_currentConversationId))
+        return;
+    qint64 branchId = 0;
+    QString error;
+    if (!m_api->branchConversation(m_currentConversationId, messageId,
+                                   QString(), &branchId, &error)) {
+        emit toast(QStringLiteral("Erro ao ramificar: ") + error);
+        return;
+    }
+    rebuildSidebar();
+    openConversationInternal(branchId);
+    emit toast(QStringLiteral("Ramificação criada a partir da mensagem."));
+}
+
 void AppController::convertConversationToProject(qint64 id)
 {
     if (id <= 0)
@@ -1673,6 +1950,7 @@ void AppController::destroyRun(AgentRun *run)
     if (run->process) {
         QProcess *process = run->process;
         run->process = nullptr;
+        QObject::disconnect(process, nullptr, this, nullptr);
         process->kill();
         process->deleteLater();
     }
@@ -1761,6 +2039,24 @@ void AppController::startRun(const QString &title, bool persistUser)
             ? projectPrompt
             : systemPrompt + QStringLiteral("\n\n") + projectPrompt;
     }
+    if (run->projectId > 0 && !m_projectMemories.isEmpty()) {
+        QStringList memories;
+        int totalLength = 0;
+        for (const QVariant &value : m_projectMemories) {
+            const QString note = value.toMap().value(QStringLiteral("content"))
+                                     .toString().trimmed();
+            if (!note.isEmpty()) {
+                const QString included = note.left(qMin(2000, 6000 - totalLength));
+                memories.append(QStringLiteral("- ") + included);
+                totalLength += included.size();
+            }
+            if (memories.size() >= 20 || totalLength >= 6000)
+                break;
+        }
+        if (!memories.isEmpty())
+            systemPrompt += QStringLiteral("\n\nMemórias salvas deste projeto:\n")
+                            + memories.join(QLatin1Char('\n'));
+    }
     if (run->toolsEnabled) {
         const QString context = agentContextText();
         if (!context.isEmpty()) {
@@ -1822,11 +2118,7 @@ void AppController::startRun(const QString &title, bool persistUser)
                 onRunFinished(run, fullText, fullReasoning);
             });
     connect(run->stream, &StreamClient::failed, this, [this, run](const QString &error) {
-        if (displayingRun(run)
-            && m_messages->lastRole() == QLatin1String("assistant"))
-            m_messages->failAssistant(error);
-        destroyRun(run);
-        emit toast(QStringLiteral("Falha no chat: ") + error);
+        failRun(run, error);
     });
 
     m_runs.append(run);
@@ -1847,10 +2139,28 @@ void AppController::sendRound(AgentRun *run)
     if (run->round > 1 && displayingRun(run))
         m_messages->beginAssistant();
 
+    QVector<Message> messages = run->messages;
+    const bool finalRound = run->round > kMaxAgentRounds;
+    if (finalRound) {
+        const QString conclusion = QStringLiteral(
+            "\n\nO limite de etapas desta execução foi atingido. Agora conclua com uma "
+            "resposta final em português, usando apenas os resultados já recebidos. "
+            "Informe o que foi concluído, eventuais erros, o que falta e os caminhos "
+            "dos arquivos gerados. Não prometa executar outra ação nem chame ferramentas. "
+            "Não declare sucesso sem evidência nos resultados.");
+        if (!messages.isEmpty() && messages.first().role == QLatin1String("system"))
+            messages.first().content += conclusion;
+        else {
+            Message system;
+            system.role = QStringLiteral("system");
+            system.content = conclusion;
+            messages.prepend(system);
+        }
+    }
     run->stream->send(run->conversationId, run->projectId, run->title,
-                      run->model, run->effort, run->allowImages, run->messages,
-                      run->toolsEnabled ? toolDefinitions() : QJsonArray(),
-                      run->persistUser, true);
+                      run->model, run->effort, run->allowImages, messages,
+                      run->toolsEnabled && !finalRound ? toolDefinitions() : QJsonArray(),
+                      run->persistUser && run->round == 1, true, run->sources);
 }
 
 void AppController::onRunFinished(AgentRun *run, const QString &fullText,
@@ -1858,10 +2168,11 @@ void AppController::onRunFinished(AgentRun *run, const QString &fullText,
 {
     const QVector<ToolCall> calls = run->stream->toolCalls();
 
-    if (!run->aborted && !calls.isEmpty() && run->round < kMaxAgentRounds) {
+    if (!run->aborted && !calls.isEmpty() && run->round <= kMaxAgentRounds) {
         Message assistant;
         assistant.role = QStringLiteral("assistant");
         assistant.content = fullText;
+        assistant.reasoning = fullReasoning;
         assistant.toolCalls = calls;
         run->messages.append(assistant);
 
@@ -1876,10 +2187,33 @@ void AppController::onRunFinished(AgentRun *run, const QString &fullText,
         return;
     }
 
-    if (!run->aborted && !calls.isEmpty())
-        emit toast(QStringLiteral("Limite de passos da IA atingido nesta resposta."));
+    if (!run->aborted && !calls.isEmpty()) {
+        failRun(run, QStringLiteral("O limite de etapas foi atingido. As ações pendentes "
+                                    "não foram executadas; peça para continuar."));
+        return;
+    }
 
     finishRun(run, fullText, fullReasoning);
+}
+
+void AppController::failRun(AgentRun *run, const QString &error)
+{
+    if (displayingRun(run)) {
+        if (m_messages->lastRole() != QLatin1String("assistant"))
+            m_messages->beginAssistant();
+        m_messages->failAssistant(error);
+        // Preserve partial output in the context for an explicit continuation.
+        const QString text = run->stream->fullText();
+        if (!text.isEmpty()) {
+            Message partial;
+            partial.role = QStringLiteral("assistant");
+            partial.content = text;
+            partial.reasoning = run->stream->fullReasoning();
+            m_history.append(partial);
+        }
+    }
+    destroyRun(run);
+    emit toast(QStringLiteral("Falha no chat: ") + error);
 }
 
 void AppController::finishRun(AgentRun *run, const QString &fullText,
@@ -1891,6 +2225,7 @@ void AppController::finishRun(AgentRun *run, const QString &fullText,
     const QString runModel = run->model;
     const QString runEffort = run->effort;
     const bool runGenerateTitle = run->generateTitle;
+    const bool aborted = run->aborted;
 
     if (displaying && m_messages->lastRole() == QLatin1String("assistant")) {
         if (fullText.isEmpty() && fullReasoning.isEmpty())
@@ -1901,7 +2236,7 @@ void AppController::finishRun(AgentRun *run, const QString &fullText,
 
     destroyRun(run);
 
-    if (displaying && streamConversation > 0
+    if (!aborted && displaying && streamConversation > 0
         && m_currentConversationId == streamConversation) {
         QVector<Message> stored;
         if (m_api->messages(m_currentConversationId, &stored)) {
@@ -1913,7 +2248,7 @@ void AppController::finishRun(AgentRun *run, const QString &fullText,
     rebuildSidebar();
     refreshUsage();
 
-    if (Config::instance().ui().notifyOnFinish && m_tray) {
+    if (!aborted && Config::instance().ui().notifyOnFinish && m_tray) {
         const QString label = runTitle.left(60);
         m_notifyConversation = streamConversation;
         m_tray->showMessage(QStringLiteral("DeepSeek Chat"),
@@ -1921,7 +2256,7 @@ void AppController::finishRun(AgentRun *run, const QString &fullText,
                             QSystemTrayIcon::Information, 6000);
     }
 
-    if (displaying && streamConversation > 0) {
+    if (!aborted && displaying && streamConversation > 0) {
         if (runGenerateTitle)
             maybeGenerateTitle(streamConversation, runModel, runEffort);
         const double percent = m_usage.value(QStringLiteral("percent")).toDouble();
@@ -2029,6 +2364,10 @@ void AppController::performToolCall(AgentRun *run, const ToolCall &call)
         browseUrl(run, call);
         return;
     }
+    if (call.name == QLatin1String("search_web")) {
+        searchWeb(run, call);
+        return;
+    }
     if (call.name.startsWith(QLatin1String("mcp__"))) {
         mcpCallTool(run, call);
         return;
@@ -2060,6 +2399,28 @@ void AppController::performToolCall(AgentRun *run, const ToolCall &call)
 void AppController::finishToolCall(AgentRun *run, const QString &result,
                                    const QString &summary)
 {
+    if (run->currentTool.name == QLatin1String("fetch_url")
+        || run->currentTool.name == QLatin1String("browse_url")) {
+        const QJsonObject page = QJsonDocument::fromJson(result.toUtf8()).object();
+        const QString url = page.value(QStringLiteral("url")).toString();
+        const QString content = page.value(QStringLiteral("content")).toString().simplified();
+        if (!url.isEmpty() && !content.isEmpty()
+            && page.value(QStringLiteral("status")).toInt(200) < 400) {
+            bool duplicate = false;
+            for (const QJsonValue &value : run->sources)
+                duplicate |= value.toObject().value(QStringLiteral("url")).toString() == url;
+            if (!duplicate && run->sources.size() < 12) {
+                QJsonObject source;
+                source.insert(QStringLiteral("url"), url);
+                const QString pageTitle = page.value(QStringLiteral("title"))
+                                              .toString().trimmed();
+                source.insert(QStringLiteral("title"),
+                              (pageTitle.isEmpty() ? QUrl(url).host() : pageTitle).left(200));
+                source.insert(QStringLiteral("excerpt"), content.left(400));
+                run->sources.append(source);
+            }
+        }
+    }
     if (displayingRun(run))
         m_messages->updateLastTool(summary, result.left(20000));
 
@@ -2151,21 +2512,19 @@ void AppController::stop()
         return;
 
     run->aborted = true;
+    bool waitingApproval = false;
+    for (const ApprovalRequest &request : m_approvals)
+        waitingApproval |= request.run == run;
     if (run->process)
         run->process->kill();
     if (run->stream)
         run->stream->cancel();
 
-    QVector<ApprovalRequest> pending;
-    for (const ApprovalRequest &request : m_approvals) {
-        if (request.run != run)
-            pending.append(request);
-    }
-    if (pending.size() != m_approvals.size()) {
-        m_approvals = pending;
-        m_approvalShown = false;
-        emit approvalClosed();
-        showNextApproval();
+    removeApprovalsFor(run);
+    if (waitingApproval) {
+        if (displayingRun(run) && m_messages->lastRole() == QLatin1String("tool"))
+            m_messages->updateLastTool(QStringLiteral("Ação cancelada pelo usuário."), QString());
+        finishRun(run, QString(), QString());
     }
 }
 
@@ -2394,20 +2753,22 @@ void AppController::regenerateLast()
         return;
     }
 
-    const qint64 fromId = m_history.at(lastUser + 1).id;
-    if (fromId <= 0) {
+    const qint64 throughId = m_history.at(lastUser).id;
+    if (throughId <= 0) {
         emit toast(QStringLiteral("Não foi possível regenerar esta conversa."));
         return;
     }
 
+    qint64 branchId = 0;
     QString error;
-    if (!m_api->truncateConversation(m_currentConversationId, fromId, &error)) {
+    if (!m_api->branchConversation(m_currentConversationId, throughId,
+                                   QString(), &branchId, &error)) {
         emit toast(QStringLiteral("Erro ao regenerar: ") + error);
         return;
     }
 
-    m_history.remove(lastUser + 1, m_history.size() - lastUser - 1);
-    m_messages->setMessages(m_history);
+    rebuildSidebar();
+    openConversationInternal(branchId);
     m_messages->beginAssistant();
     startRun(m_currentTitle.isEmpty() ? QStringLiteral("Nova conversa")
                                       : m_currentTitle,
@@ -2433,17 +2794,17 @@ void AppController::editMessage(qint64 messageId, const QString &newText)
         return;
     }
 
-    const qint64 fromId = m_history.at(index).id;
-    if (fromId > 0) {
-        QString error;
-        if (!m_api->truncateConversation(m_currentConversationId, fromId, &error)) {
-            emit toast(QStringLiteral("Erro ao editar: ") + error);
-            return;
-        }
+    const qint64 throughId = index > 0 ? m_history.at(index - 1).id : -1;
+    qint64 branchId = 0;
+    QString error;
+    if (!m_api->branchConversation(m_currentConversationId, throughId,
+                                   QString(), &branchId, &error)) {
+        emit toast(QStringLiteral("Erro ao editar: ") + error);
+        return;
     }
 
-    m_history.remove(index, m_history.size() - index);
-    m_messages->setMessages(m_history);
+    rebuildSidebar();
+    openConversationInternal(branchId);
     send(trimmed);
 }
 
@@ -2633,7 +2994,7 @@ void AppController::runTerminalCommand(const QString &command)
                 m_ptyMaster = master;
                 m_terminal = process;
                 auto *notifier = new QSocketNotifier(master, QSocketNotifier::Read, this);
-                connect(notifier, &QSocketNotifier::Read, this, [this] {
+                connect(notifier, &QSocketNotifier::activated, this, [this] {
                     char buffer[4096];
                     const ssize_t n = ::read(m_ptyMaster, buffer, sizeof(buffer));
                     if (n > 0)
@@ -3053,6 +3414,7 @@ void AppController::openArtifact(const QString &path)
     }
     m_artifactPath = info.absoluteFilePath();
     m_artifactContent = QString::fromUtf8(raw);
+    refreshArtifactVersions();
     emit artifactChanged();
     emit toast(QStringLiteral("Aberto no painel: %1").arg(info.fileName()));
 }
@@ -3061,6 +3423,7 @@ void AppController::closeArtifact()
 {
     m_artifactPath.clear();
     m_artifactContent.clear();
+    m_artifactVersions.clear();
     emit artifactChanged();
 }
 
@@ -3069,17 +3432,90 @@ void AppController::saveArtifact(const QString &content)
     if (m_artifactPath.isEmpty())
         return;
     backupFile(m_artifactPath);
-    QFile file(m_artifactPath);
+    QSaveFile file(m_artifactPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         emit toast(QStringLiteral("Não foi possível gravar %1").arg(m_artifactPath));
         return;
     }
-    file.write(content.toUtf8());
-    file.close();
+    const QByteArray bytes = content.toUtf8();
+    if (file.write(bytes) != bytes.size() || !file.commit()) {
+        emit toast(QStringLiteral("Não foi possível concluir a gravação."));
+        return;
+    }
     m_artifactContent = content;
+    refreshArtifactVersions();
     m_api->logActivity(QStringLiteral("file_write"), m_artifactPath);
     emit artifactChanged();
     emit toast(QStringLiteral("Arquivo salvo: %1").arg(m_artifactPath));
+}
+
+void AppController::refreshArtifactVersions()
+{
+    m_artifactVersions.clear();
+    if (m_artifactPath.isEmpty())
+        return;
+    const QString key = QString::fromLatin1(
+        QCryptographicHash::hash(m_artifactPath.toUtf8(), QCryptographicHash::Sha1).toHex());
+    QDir dir(backupsRoot() + QLatin1Char('/') + key);
+    for (const QFileInfo &file : dir.entryInfoList(QDir::Files, QDir::Time)) {
+        QVariantMap version;
+        version.insert(QStringLiteral("path"), file.absoluteFilePath());
+        version.insert(QStringLiteral("label"),
+                       file.lastModified().toString(QStringLiteral("dd/MM/yyyy HH:mm:ss")));
+        m_artifactVersions.append(version);
+    }
+}
+
+void AppController::restoreArtifactVersion(const QString &versionPath)
+{
+    if (m_artifactPath.isEmpty() || versionPath.isEmpty())
+        return;
+    const QString clean = QFileInfo(versionPath).absoluteFilePath();
+    bool listed = false;
+    for (const QVariant &value : m_artifactVersions)
+        listed |= value.toMap().value(QStringLiteral("path")).toString() == clean;
+    if (!listed) {
+        emit toast(QStringLiteral("Versão não encontrada."));
+        return;
+    }
+    QFile previous(clean);
+    if (!previous.open(QIODevice::ReadOnly)) {
+        emit toast(QStringLiteral("Não foi possível ler a versão."));
+        return;
+    }
+    const QByteArray data = previous.readAll();
+    previous.close();
+    if (data.size() > kMaxWriteBytes || data.contains('\0')) {
+        emit toast(QStringLiteral("Versão incompatível com o painel."));
+        return;
+    }
+    backupFile(m_artifactPath);
+    QSaveFile current(m_artifactPath);
+    if (!current.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        || current.write(data) != data.size()
+        || !current.commit()) {
+        emit toast(QStringLiteral("Não foi possível restaurar a versão."));
+        return;
+    }
+    m_artifactContent = QString::fromUtf8(data);
+    refreshArtifactVersions();
+    emit artifactChanged();
+    emit toast(QStringLiteral("Versão restaurada."));
+}
+
+QString AppController::artifactDiff(const QString &edited) const
+{
+    if (edited == m_artifactContent)
+        return QStringLiteral("Sem alterações desde a última gravação.");
+    return diffText(m_artifactContent, edited);
+}
+
+QString AppController::artifactPreviewUrl(const QString &edited) const
+{
+    if (!m_artifactPath.endsWith(QLatin1String(".svg"), Qt::CaseInsensitive))
+        return QString();
+    return QStringLiteral("data:image/svg+xml;base64,")
+           + QString::fromLatin1(edited.toUtf8().toBase64());
 }
 
 void AppController::loadMcpServers()
@@ -3524,7 +3960,8 @@ QString AppController::agentContextText() const
         "Use list_files e read_file para inspecionar arquivos, write_file para criar ou "
         "editar arquivos no disco, download_file para baixar arquivos/instaladores da "
         "internet, run_command para executar programas e comandos (instalações, builds, "
-        "scripts, etc.) e fetch_url para ler páginas da internet. "
+        "scripts, etc.), search_web para pesquisar e fetch_url para ler páginas. "
+        "Ao pesquisar, abra as fontes relevantes e cite seus URLs em links Markdown. "
         "Use caminhos relativos à pasta de trabalho do projeto sempre que possível. "
         "Para gerar uma imagem, crie o arquivo (png/jpg) com run_command (ex.: script "
         "Python/matplotlib ou ImageMagick) e, para exibi-la no chat, escreva na resposta "
@@ -3537,6 +3974,16 @@ QString AppController::agentContextText() const
                             ? QStringLiteral("(não definida)")
                             : QDir::toNativeSeparators(m_activeProject.workdir));
     context += QStringLiteral("\nModo de permissão atual: %1.").arg(modeText);
+    context += QStringLiteral(
+        "\nConclua a tarefa com uma resposta final que descreva o resultado e o que "
+        "não conseguiu concluir. Evite repetir verificações sem novas evidências.");
+#ifdef Q_OS_WIN
+    context += QStringLiteral(
+        "\nO run_command executa comandos no cmd.exe (/D /S /C), não no PowerShell. "
+        "Para PowerShell, invoque powershell.exe explicitamente. Para abrir um aplicativo "
+        "gráfico sem aguardar seu fechamento, use start \"\" \"caminho\\programa.exe\". "
+        "Um processo encerrado por timeout não comprova que o aplicativo ficou aberto.");
+#endif
     return context;
 }
 
@@ -3568,7 +4015,8 @@ bool AppController::toolNeedsApproval(const AgentRun *run, const ToolCall &call,
         return true;
 
     if (call.name == QLatin1String("fetch_url")
-        || call.name == QLatin1String("browse_url"))
+        || call.name == QLatin1String("browse_url")
+        || call.name == QLatin1String("search_web"))
         return true;
 
     if (call.name.startsWith(QLatin1String("mcp__")))
@@ -4161,13 +4609,19 @@ void AppController::browseUrl(AgentRun *run, const ToolCall &call)
                 }
 
                 const QByteArray limited = raw.left(kMaxFetchBytes);
-                QString body = htmlToText(QString::fromUtf8(limited));
+                const QString html = QString::fromUtf8(limited);
+                const QRegularExpression titlePattern(
+                    QStringLiteral("<title[^>]*>([\\s\\S]*?)</title>"),
+                    QRegularExpression::CaseInsensitiveOption);
+                const QString title = htmlToText(titlePattern.match(html).captured(1));
+                QString body = htmlToText(html);
                 if (raw.size() > limited.size())
                     body += QStringLiteral("\n\n[conteúdo truncado em %1]")
                                 .arg(formatSize(limited.size()));
 
                 QJsonObject out;
                 out.insert(QStringLiteral("url"), url);
+                out.insert(QStringLiteral("title"), title);
                 out.insert(QStringLiteral("content"), body);
                 finishToolCall(run,
                     QString::fromUtf8(QJsonDocument(out).toJson(QJsonDocument::Compact)),
@@ -4191,6 +4645,73 @@ void AppController::browseUrl(AgentRun *run, const ToolCall &call)
                     QStringLiteral("--no-default-browser-check"),
                     QStringLiteral("--dump-dom"), url});
     timer->start(60000);
+}
+
+void AppController::searchWeb(AgentRun *run, const ToolCall &call)
+{
+    QString error;
+    const QJsonObject args = parseArguments(call, &error);
+    const QString query = args.value(QStringLiteral("query")).toString().trimmed();
+    if (!error.isEmpty() || query.isEmpty() || query.size() > 300) {
+        finishToolCall(run, QStringLiteral("{\"error\":\"Pesquisa inválida.\"}"),
+                       QStringLiteral("⚙ search_web: pesquisa inválida"));
+        return;
+    }
+
+    auto *manager = new QNetworkAccessManager(this);
+    QUrl url(QStringLiteral("https://www.bing.com/search"));
+    QUrlQuery params;
+    params.addQueryItem(QStringLiteral("format"), QStringLiteral("rss"));
+    params.addQueryItem(QStringLiteral("q"), query);
+    url.setQuery(params);
+    QNetworkRequest request(url);
+    request.setTransferTimeout(30000);
+    request.setHeader(QNetworkRequest::UserAgentHeader,
+                      QStringLiteral("Mozilla/5.0 DeepSeekChat/1.0"));
+    QNetworkReply *reply = manager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, run, reply, manager, query] {
+        const QByteArray data = reply->readAll();
+        const auto networkError = reply->error();
+        const QString networkText = reply->errorString();
+        reply->deleteLater();
+        manager->deleteLater();
+        if (networkError != QNetworkReply::NoError) {
+            finishToolCall(run, QStringLiteral("{\"error\":%1}").arg(jsonQuote(networkText)),
+                           QStringLiteral("⚙ search_web: falhou"));
+            return;
+        }
+
+        QJsonArray results;
+        QXmlStreamReader xml(data.left(512 * 1024));
+        while (!xml.atEnd() && results.size() < 8) {
+            xml.readNext();
+            if (!xml.isStartElement() || xml.name() != QLatin1String("item"))
+                continue;
+            QJsonObject item;
+            while (xml.readNextStartElement()) {
+                const QString name = xml.name().toString();
+                const QString value = xml.readElementText(QXmlStreamReader::SkipChildElements);
+                if (name == QLatin1String("title"))
+                    item.insert(QStringLiteral("title"), value.left(200));
+                else if (name == QLatin1String("link"))
+                    item.insert(QStringLiteral("url"), value);
+                else if (name == QLatin1String("description"))
+                    item.insert(QStringLiteral("summary"), htmlToText(value).left(500));
+            }
+            const QUrl resultUrl(item.value(QStringLiteral("url")).toString());
+            if (resultUrl.isValid() && (resultUrl.scheme() == QLatin1String("https")
+                                        || resultUrl.scheme() == QLatin1String("http")))
+                results.append(item);
+        }
+        QJsonObject out;
+        out.insert(QStringLiteral("query"), query);
+        out.insert(QStringLiteral("results"), results);
+        if (results.isEmpty())
+            out.insert(QStringLiteral("note"), QStringLiteral("Nenhum resultado disponível."));
+        finishToolCall(run,
+            QString::fromUtf8(QJsonDocument(out).toJson(QJsonDocument::Compact)),
+            QStringLiteral("⚙ search_web: %1 resultado(s)").arg(results.size()));
+    });
 }
 
 void AppController::fetchUrl(AgentRun *run, const ToolCall &call)
@@ -4243,14 +4764,21 @@ void AppController::fetchUrl(AgentRun *run, const ToolCall &call)
 
         const QByteArray limited = data.left(kMaxFetchBytes);
         QString body = QString::fromUtf8(limited);
-        if (contentType.contains(QLatin1String("html"), Qt::CaseInsensitive))
+        QString title;
+        if (contentType.contains(QLatin1String("html"), Qt::CaseInsensitive)) {
+            const QRegularExpression titlePattern(
+                QStringLiteral("<title[^>]*>([\\s\\S]*?)</title>"),
+                QRegularExpression::CaseInsensitiveOption);
+            title = htmlToText(titlePattern.match(body).captured(1));
             body = htmlToText(body);
+        }
         if (data.size() > limited.size())
             body += QStringLiteral("\n\n[conteúdo truncado em %1]")
                         .arg(formatSize(limited.size()));
 
         QJsonObject out;
         out.insert(QStringLiteral("url"), url);
+        out.insert(QStringLiteral("title"), title);
         out.insert(QStringLiteral("status"), status);
         out.insert(QStringLiteral("content"), body);
         finishToolCall(run,
@@ -4409,7 +4937,7 @@ void AppController::runCommand(AgentRun *run, const ToolCall &call)
 
 #ifdef Q_OS_WIN
     const QString program = QStringLiteral("cmd.exe");
-    const QStringList shellArgs = {QStringLiteral("/C"), command};
+    const QStringList shellArgs;
 #else
     const QString program = QStringLiteral("/bin/sh");
     const QStringList shellArgs = {QStringLiteral("-c"), command};
@@ -4419,6 +4947,10 @@ void AppController::runCommand(AgentRun *run, const ToolCall &call)
     auto *process = new QProcess(this);
     process->setWorkingDirectory(cwd);
     process->setProcessChannelMode(QProcess::MergedChannels);
+#ifdef Q_OS_WIN
+    // cmd.exe does not parse the CRT backslash escaping used by QProcess arguments.
+    process->setNativeArguments(QStringLiteral("/D /S /C \"") + command + QLatin1Char('"'));
+#endif
     run->process = process;
 
     auto *timer = new QTimer(process);
@@ -4441,8 +4973,20 @@ void AppController::runCommand(AgentRun *run, const ToolCall &call)
                 process->deleteLater();
 
                 QString output = QString::fromUtf8(raw);
-                if (output.contains(QChar::ReplacementCharacter))
+                if (output.contains(QChar::ReplacementCharacter)) {
+#ifdef Q_OS_WIN
+                    const int count = MultiByteToWideChar(GetOEMCP(), 0, raw.constData(),
+                                                        int(raw.size()), nullptr, 0);
+                    if (count > 0) {
+                        std::wstring decoded(size_t(count), L'\0');
+                        MultiByteToWideChar(GetOEMCP(), 0, raw.constData(), int(raw.size()),
+                                            decoded.data(), count);
+                        output = QString::fromStdWString(decoded);
+                    }
+#else
                     output = QString::fromLocal8Bit(raw);
+#endif
+                }
                 if (output.size() > kMaxToolOutput) {
                     const QString head = output.left(kMaxToolOutput - 20 * 1024);
                     const QString tail = output.right(20 * 1024);
@@ -4502,7 +5046,9 @@ QString AppController::htmlToText(const QString &html)
 
 QString AppController::toolApprovalTitle(const ToolCall &call)
 {
-    if (call.name == QLatin1String("fetch_url"))
+    if (call.name == QLatin1String("fetch_url")
+        || call.name == QLatin1String("browse_url")
+        || call.name == QLatin1String("search_web"))
         return QStringLiteral("A IA quer acessar a internet");
     if (call.name == QLatin1String("download_file"))
         return QStringLiteral("A IA quer baixar um arquivo");
@@ -4528,7 +5074,11 @@ QString AppController::toolApprovalDetail(const AgentRun *run, const ToolCall &c
 {
     QString error;
     const QJsonObject args = parseArguments(call, &error);
-    if (call.name == QLatin1String("fetch_url"))
+    if (call.name == QLatin1String("search_web"))
+        return QStringLiteral("Pesquisa: %1")
+            .arg(args.value(QStringLiteral("query")).toString());
+    if (call.name == QLatin1String("fetch_url")
+        || call.name == QLatin1String("browse_url"))
         return QStringLiteral("URL: %1").arg(args.value(QStringLiteral("url")).toString());
 
     if (call.name == QLatin1String("download_file")) {
@@ -4640,6 +5190,15 @@ QJsonArray AppController::toolDefinitions()
     tools.append(makeTool(QStringLiteral("fetch_url"),
                           QStringLiteral("Baixa o conteúdo de uma página da internet."),
                           fetchProps, QJsonArray{QStringLiteral("url")}));
+
+    QJsonObject searchProps;
+    searchProps.insert(QStringLiteral("query"), stringProp(QStringLiteral(
+        "Termos da pesquisa na web.")));
+    tools.append(makeTool(QStringLiteral("search_web"),
+                          QStringLiteral("Pesquisa páginas na web. Retorna títulos, links e "
+                                         "resumos; abra as fontes relevantes com fetch_url "
+                                         "ou browse_url antes de citá-las."),
+                          searchProps, QJsonArray{QStringLiteral("query")}));
 
     QJsonObject downloadProps;
     downloadProps.insert(QStringLiteral("url"), stringProp(QStringLiteral(
@@ -4781,6 +5340,68 @@ void AppController::attachFiles()
         m_api->logActivity(QStringLiteral("attachment_add"),
                            added.join(QStringLiteral(", ")));
     emit attachmentsChanged();
+}
+
+void AppController::attachCapturedPixmap(const QPixmap &pixmap)
+{
+    if (pixmap.isNull()) {
+        emit toast(QStringLiteral("Não foi possível capturar a tela."));
+        return;
+    }
+    const QString dirPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+                            + QStringLiteral("/deepseek-chat-captures");
+    if (!QDir().mkpath(dirPath)) {
+        emit toast(QStringLiteral("Não foi possível preparar a captura."));
+        return;
+    }
+    QString path = QDir(dirPath).filePath(
+        QStringLiteral("captura-%1.png").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    if (!pixmap.save(path, "PNG")) {
+        emit toast(QStringLiteral("Não foi possível salvar a captura."));
+        return;
+    }
+    if (QFileInfo(path).size() > 10LL * 1024 * 1024) {
+        const QString jpeg = path.left(path.size() - 4) + QStringLiteral(".jpg");
+        if (!pixmap.save(jpeg, "JPEG", 82)) {
+            emit toast(QStringLiteral("Captura grande demais para anexar."));
+            return;
+        }
+        path = jpeg;
+    }
+    if (!addAttachmentPath(path)) {
+        emit toast(QStringLiteral("Não foi possível anexar a captura."));
+        return;
+    }
+    bool imageSupported = true;
+    for (const QVariant &value : m_modelsList) {
+        const QVariantMap model = value.toMap();
+        if (model.value(QStringLiteral("id")).toString() == m_currentModel) {
+            imageSupported = model.value(QStringLiteral("supportsImages")).toBool();
+            break;
+        }
+    }
+    emit toast(imageSupported
+        ? QStringLiteral("Captura anexada à mensagem.")
+        : QStringLiteral("Captura anexada; selecione um modelo com visão para analisá-la."));
+}
+
+void AppController::captureScreenRegion()
+{
+    QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    if (!screen)
+        return;
+    new ScreenRegionPicker(screen, [this](const QPixmap &pixmap) {
+        attachCapturedPixmap(pixmap);
+    });
+}
+
+void AppController::captureAppWindow()
+{
+    if (!m_window || !m_window->screen())
+        return;
+    attachCapturedPixmap(m_window->screen()->grabWindow(m_window->winId()));
 }
 
 bool AppController::addAttachmentPath(const QString &path)
@@ -5158,6 +5779,12 @@ void AppController::logClientActivity(const QString &action, const QString &deta
 void AppController::saveSettings(const QVariantMap &data)
 {
     Config &config = Config::instance();
+    config.ui().sidebarFontSize = qBound(9, data.value(QStringLiteral("sidebarFontSize"), config.ui().sidebarFontSize).toInt(), 22);
+    config.ui().codeFontSize = qBound(9, data.value(QStringLiteral("codeFontSize"), config.ui().codeFontSize).toInt(), 28);
+    const QString uiFamily = data.value(QStringLiteral("fontFamily"), config.ui().fontFamily).toString().trimmed();
+    const QString chatFamily = data.value(QStringLiteral("chatFontFamily"), config.ui().chatFontFamily).toString().trimmed();
+    if (!uiFamily.isEmpty()) config.ui().fontFamily = uiFamily;
+    if (!chatFamily.isEmpty()) config.ui().chatFontFamily = chatFamily;
 
     const QString newUrl = data.value(QStringLiteral("apiUrl"),
                                       config.api().baseUrl).toString().trimmed();
@@ -5285,6 +5912,20 @@ void AppController::openConfigFile()
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
+int AppController::sidebarWidth() const { return Config::instance().ui().sidebarWidth; }
+bool AppController::sidebarCollapsed() const { return Config::instance().ui().sidebarCollapsed; }
+
+void AppController::saveNavigationLayout(int width, bool collapsed)
+{
+    auto &config = Config::instance();
+    config.ui().sidebarWidth = qBound(220, width, 480);
+    config.ui().sidebarCollapsed = collapsed;
+    QString error;
+    if (!config.save(&error))
+        emit toast(QStringLiteral("Falha ao salvar o tamanho da barra lateral: ") + error);
+    emit uiSettingsChanged();
+}
+
 QVariantMap AppController::currentSettings() const
 {
     const Config &config = Config::instance();
@@ -5293,6 +5934,10 @@ QVariantMap AppController::currentSettings() const
     map.insert(QStringLiteral("theme"), config.ui().theme);
     map.insert(QStringLiteral("fontSize"), config.ui().fontSize);
     map.insert(QStringLiteral("chatFontSize"), config.ui().chatFontSize);
+    map.insert(QStringLiteral("sidebarFontSize"), config.ui().sidebarFontSize);
+    map.insert(QStringLiteral("codeFontSize"), config.ui().codeFontSize);
+    map.insert(QStringLiteral("fontFamily"), config.ui().fontFamily);
+    map.insert(QStringLiteral("chatFontFamily"), config.ui().chatFontFamily);
     map.insert(QStringLiteral("enterToSend"), config.ui().enterToSend);
     map.insert(QStringLiteral("showReasoning"), config.ui().showReasoning);
     map.insert(QStringLiteral("permissionMode"), config.ui().permissionMode);
@@ -5511,6 +6156,19 @@ void AppController::refreshBalance()
                parts.isEmpty() ? QString() : parts.join(QStringLiteral(" / ")));
     m_balanceInfo = map;
     emit balanceChanged();
+}
+
+QString AppController::estimateMessageCost(const QString &text) const
+{
+    const qint64 inputTokens = qMax<qint64>(1, text.toUtf8().size() / 4);
+    // A short answer is the least surprising estimate before the model replies.
+    const qint64 outputTokens = qMax<qint64>(100, inputTokens / 2);
+    const QString model = m_currentModel.isEmpty()
+        ? Config::instance().deepseek().defaultModel : m_currentModel;
+    const double cost = costForModel(model, inputTokens, outputTokens, 0);
+    return QStringLiteral("Estimativa: ~%1 tokens · US$ %2")
+        .arg(QLocale().toString(inputTokens + outputTokens))
+        .arg(QLocale().toString(cost, 'f', 4));
 }
 
 void AppController::refreshUsage()

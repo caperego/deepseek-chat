@@ -411,6 +411,8 @@ bool ApiClient::conversations(QVector<Conversation> *out, QString *error)
             conversation.id = static_cast<qint64>(object.value(QStringLiteral("id")).toDouble());
             conversation.userId = static_cast<qint64>(object.value(QStringLiteral("user_id")).toDouble());
             conversation.projectId = static_cast<qint64>(object.value(QStringLiteral("project_id")).toDouble());
+            conversation.parentId = static_cast<qint64>(object.value(QStringLiteral("parent_id")).toDouble());
+            conversation.forkMessageId = static_cast<qint64>(object.value(QStringLiteral("fork_message_id")).toDouble());
             conversation.title = object.value(QStringLiteral("title")).toString();
             conversation.model = object.value(QStringLiteral("model")).toString();
             conversation.effort = object.value(QStringLiteral("effort")).toString();
@@ -490,6 +492,24 @@ bool ApiClient::truncateConversation(qint64 conversationId, qint64 fromMessageId
     return response.ok;
 }
 
+bool ApiClient::branchConversation(qint64 conversationId, qint64 throughMessageId,
+                                   const QString &title, qint64 *newId, QString *error)
+{
+    QJsonObject body;
+    body.insert(QStringLiteral("through_message_id"), static_cast<double>(throughMessageId));
+    if (!title.isEmpty())
+        body.insert(QStringLiteral("title"), title);
+    Response response = call("POST", QStringLiteral("/conversations/%1/branch").arg(conversationId), body);
+    if (!response.ok) {
+        if (error)
+            *error = response.error;
+        return false;
+    }
+    if (newId)
+        *newId = static_cast<qint64>(response.doc.object().value(QStringLiteral("id")).toDouble());
+    return true;
+}
+
 bool ApiClient::searchMessages(const QString &query, QVector<SearchHit> *out,
                                QString *error)
 {
@@ -539,6 +559,7 @@ bool ApiClient::messages(qint64 conversationId, QVector<Message> *out,
                 object.value(QStringLiteral("content")).toString());
             message.reasoning = object.value(QStringLiteral("reasoning")).toString();
             message.model = object.value(QStringLiteral("model")).toString();
+            message.sources = object.value(QStringLiteral("sources")).toArray().toVariantList();
             message.promptTokens = static_cast<qint64>(
                 object.value(QStringLiteral("prompt_tokens")).toDouble());
             message.completionTokens = static_cast<qint64>(
@@ -699,6 +720,50 @@ bool ApiClient::addProjectItem(const ProjectItem &item, QString *error)
 bool ApiClient::removeProjectItem(qint64 id, QString *error)
 {
     Response response = call("DELETE", QStringLiteral("/project-items/%1").arg(id));
+    if (!response.ok && error)
+        *error = response.error;
+    return response.ok;
+}
+
+bool ApiClient::projectMemories(qint64 projectId, QVariantList *out, QString *error)
+{
+    const QString path = QStringLiteral("/project-memories?project_id=%1").arg(projectId);
+    Response response = call("GET", path);
+    if (!response.ok) {
+        if (error)
+            *error = response.error;
+        return false;
+    }
+    if (out) {
+        out->clear();
+        for (const QJsonObject &object : arrayItems(response.doc))
+            out->append(object.toVariantMap());
+    }
+    return true;
+}
+
+bool ApiClient::addProjectMemory(qint64 projectId, const QString &content, QString *error)
+{
+    QJsonObject body{{QStringLiteral("project_id"), static_cast<double>(projectId)},
+                     {QStringLiteral("content"), content}};
+    Response response = call("POST", QStringLiteral("/project-memories"), body);
+    if (!response.ok && error)
+        *error = response.error;
+    return response.ok;
+}
+
+bool ApiClient::updateProjectMemory(qint64 id, const QString &content, QString *error)
+{
+    QJsonObject body{{QStringLiteral("content"), content}};
+    Response response = call("PUT", QStringLiteral("/project-memories/%1").arg(id), body);
+    if (!response.ok && error)
+        *error = response.error;
+    return response.ok;
+}
+
+bool ApiClient::deleteProjectMemory(qint64 id, QString *error)
+{
+    Response response = call("DELETE", QStringLiteral("/project-memories/%1").arg(id));
     if (!response.ok && error)
         *error = response.error;
     return response.ok;

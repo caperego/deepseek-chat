@@ -2,6 +2,8 @@
 .rdp-pass
 connect-rdp.sh
 **/config.ini
+**/config.ini.*
+!**/config.ini.example
 **/config.php
 **/mcp.json
 .env

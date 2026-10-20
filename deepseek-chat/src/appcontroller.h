@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chattypes.h"
+#include "automationstore.h"
 
 #include <QAbstractListModel>
 #include <QHash>
@@ -24,6 +25,7 @@ class QProcess;
 class QSystemTrayIcon;
 class QSocketNotifier;
 class QWindow;
+class QTimer;
 class QMenu;
 class QPixmap;
 
@@ -65,6 +67,9 @@ public:
     QString lastRole() const;
 
 private:
+    void flushPendingUpdate();
+    QTimer *m_updateTimer = nullptr;
+    int m_pendingRow = -1;
     static QString displayContent(const QString &content);
     static QVariantList extractFiles(const QString &content);
 
@@ -84,6 +89,7 @@ private:
 };
 
 struct AgentRun {
+    QString automationId;
     StreamClient *stream = nullptr;
     qint64 conversationId = 0;
     qint64 projectId = 0;
@@ -128,7 +134,7 @@ struct McpServer {
     bool hasResources = false;
     bool hasPrompts = false;
     QByteArray buffer;
-    int nextId = 1;
+    QString status = QStringLiteral("Iniciando");
 };
 
 struct McpTool {
@@ -140,6 +146,8 @@ struct McpTool {
 
 class AppController : public QObject {
     Q_OBJECT
+    friend class AgentRegression;
+    friend class UiPreview;
 
     Q_PROPERTY(bool loggedIn READ loggedIn NOTIFY loggedInChanged)
     Q_PROPERTY(bool restoringSession READ restoringSession NOTIFY restoringSessionChanged)
@@ -151,6 +159,8 @@ class AppController : public QObject {
     Q_PROPERTY(QVariantList projectCommands READ projectCommands NOTIFY projectCommandsChanged)
     Q_PROPERTY(QVariantList globalCommands READ globalCommands NOTIFY globalCommandsChanged)
     Q_PROPERTY(QVariantList models READ models NOTIFY modelsChanged)
+    Q_PROPERTY(QVariantList mcpServers READ mcpServers NOTIFY mcpServersChanged)
+    Q_PROPERTY(QVariantList automations READ automations NOTIFY automationsChanged)
     Q_PROPERTY(QVariantList attachments READ attachments NOTIFY attachmentsChanged)
     Q_PROPERTY(QVariantList activities READ activities NOTIFY activitiesChanged)
     Q_PROPERTY(MessageListModel *messageModel READ messageModel CONSTANT)
@@ -199,6 +209,7 @@ class AppController : public QObject {
 
 public:
     explicit AppController(QObject *parent = nullptr);
+    ~AppController() override;
 
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -215,6 +226,15 @@ public:
     QVariantList projectCommands() const { return m_projectCommands; }
     QVariantList globalCommands() const { return m_globalCommands; }
     QVariantList models() const { return m_modelsList; }
+    QVariantList mcpServers() const;
+    QVariantList automations() const { return m_automations.tasks(); }
+    Q_INVOKABLE bool addAutomation(const QString &title, const QString &prompt,
+                                   int delayMinutes, int repeatMinutes, qint64 projectId);
+    Q_INVOKABLE void toggleAutomation(const QString &id);
+    Q_INVOKABLE void removeAutomation(const QString &id);
+    Q_INVOKABLE void stopAutomation(const QString &id);
+    Q_INVOKABLE bool addMcpServer(const QString &name, const QString &command, const QString &arguments);
+    Q_INVOKABLE void setMcpServerEnabled(const QString &name, bool enabled);
     QVariantList attachments() const { return m_attachments; }
     QVariantList activities() const { return m_activities; }
     MessageListModel *messageModel() { return m_messages; }
@@ -377,6 +397,8 @@ signals:
     void projectCommandsChanged();
     void globalCommandsChanged();
     void modelsChanged();
+    void mcpServersChanged();
+    void automationsChanged();
     void attachmentsChanged();
     void activitiesChanged();
     void currentConversationChanged();
@@ -432,6 +454,10 @@ private:
     void destroyRun(AgentRun *run);
     void destroyAllRuns();
     void startRun(const QString &title, bool persistUser);
+    void connectRun(AgentRun *run);
+    void pollAutomations();
+    void runAutomation(const QVariantMap &task);
+    void stopRun(AgentRun *run);
     void sendRound(AgentRun *run);
     void onRunFinished(AgentRun *run, const QString &fullText,
                        const QString &fullReasoning);
@@ -454,6 +480,9 @@ private:
                                   const QString &effort);
     void launchUpdateScript(const QString &zipPath, const QString &extractDir);
     void loadMcpServers();
+    void trackMcpCall(McpServer *server, int id, AgentRun *run, const QString &tool);
+    void failMcpCalls(McpServer *server, const QString &reason);
+    bool saveMcpServer(const QString &name, const QJsonObject &config, bool replace);
     void startMcpServer(McpServer *server);
     void updateTrayTooltip();
     void handleMcpOutput(McpServer *server);
@@ -556,8 +585,12 @@ private:
     QVector<McpServer *> m_mcpServers;
     QVector<McpTool> m_mcpTools;
     bool m_mcpLoaded = false;
-    QHash<int, AgentRun *> m_mcpCallRuns;
-    QHash<int, QString> m_mcpCallTools;
+    int m_nextMcpId = 1;
+    AutomationStore m_automations;
+    QString m_automationBackend;
+    bool m_pollingAutomations = false;
+    QHash<QPair<QString, int>, AgentRun *> m_mcpCallRuns;
+    QHash<QPair<QString, int>, QString> m_mcpCallTools;
 
     Project m_activeProject;
     qint64 m_activeProjectId = 0;

@@ -2,18 +2,28 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Dialog {
+AppDialog {
     id: dialog
+    objectName: "settingsDialog"
 
     modal: true
-    width: 800
-    height: 620
+    width: parent ? Math.min(800, parent.width - 48) : 800
+    height: parent ? Math.min(800, parent.height - 48) : 800
     title: "Configurações"
     padding: 0
     font.pointSize: theme.fontSize
+    header: Item { visible: false; implicitHeight: 0 }
 
     property string connectionStatus: ""
     property string statusText: ""
+    property int sectionIndex: 0
+    readonly property var sectionNames: ["Aparência", "Áudio", "Perfil", "Conexão", "Comandos", "Plugins MCP", "Sobre"]
+    QtObject { id: themeCombo; property int currentIndex: 0 }
+
+    function openPlugins() {
+        sectionIndex = 5
+        open()
+    }
 
     function loadSettings() {
         var settings = app.currentSettings()
@@ -94,40 +104,146 @@ Dialog {
     contentItem: ColumnLayout {
         spacing: 0
 
-        TabBar {
-            id: tabs
+        RowLayout {
             Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: 0
 
-            TabButton { text: "Aparência" }
-            TabButton { text: "Áudio" }
-            TabButton { text: "Perfil" }
-            TabButton { text: "Conexão" }
-            TabButton { text: "Comandos" }
-            TabButton { text: "MCP" }
-            TabButton { text: "Sobre" }
-        }
+            Rectangle {
+                Layout.preferredWidth: 188
+                Layout.fillHeight: true
+                color: "transparent"
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    anchors.topMargin: 22
+                    anchors.bottomMargin: 12
+                    spacing: 4
+                    Text {
+                        text: "Configurações"
+                        color: theme.text
+                        font.family: theme.fontFamily
+                        font.pointSize: theme.fontSize + 1
+                        font.weight: Font.DemiBold
+                        Layout.leftMargin: 12
+                        Layout.bottomMargin: 14
+                    }
+                    ListView {
+                        id: settingsNavigation
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: 4
+                        ScrollBar.vertical: ScrollBar {}
+                        model: dialog.sectionNames
+                        delegate: SidebarAction {
+                            required property int index
+                            required property string modelData
+                            width: settingsNavigation.width
+                            text: index === 5 ? "Plugins" : modelData
+                            font.pointSize: theme.fontSize
+                            icon.source: ["qrc:/resources/icons/eye.svg", "qrc:/resources/icons/mic.svg",
+                                          "qrc:/resources/icons/chat.svg", "qrc:/resources/icons/globe.svg",
+                                          "qrc:/resources/icons/terminal.svg", "qrc:/resources/icons/plugin.svg",
+                                          "qrc:/resources/icons/file.svg"][index]
+                            background: Rectangle {
+                                radius: 12
+                                color: dialog.sectionIndex === index || parent.hovered ? theme.selected : "transparent"
+                                border.width: parent.visualFocus ? 2 : 0
+                                border.color: theme.accent
+                            }
+                            onClicked: dialog.sectionIndex = index
+                        }
+                    }
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 0
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 20
+                    Layout.rightMargin: 14
+                    Layout.topMargin: 14
+                    Text {
+                        Layout.fillWidth: true
+                        text: dialog.sectionNames[dialog.sectionIndex]
+                        color: theme.text
+                        font.family: theme.fontFamily
+                        font.pointSize: theme.fontSize + 1
+                        font.weight: Font.DemiBold
+                    }
+                    AppButton {
+                        icon.source: "qrc:/resources/icons/close.svg"
+                        ghost: true
+                        implicitWidth: 32
+                        implicitHeight: 32
+                        leftPadding: 5
+                        rightPadding: 5
+                        ToolTip.text: "Fechar"
+                        ToolTip.visible: hovered
+                        onClicked: dialog.close()
+                    }
+                }
 
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: tabs.currentIndex
+            currentIndex: dialog.sectionIndex
 
             Item {
                 ScrollView {
+                    id: appearanceScroll
                     anchors.fill: parent
                     anchors.margins: 20
 
                     GridLayout {
-                        width: Math.min(620, parent.width)
+                        width: Math.min(620, appearanceScroll.availableWidth)
                         columns: 2
                         columnSpacing: 12
                         rowSpacing: 14
 
-                        Text { text: "Tema:"; color: theme.text }
-                        ComboBox {
-                            id: themeCombo
+                        Text { Layout.columnSpan: 2; text: "Tema"; color: theme.text }
+                        RowLayout {
+                            Layout.columnSpan: 2
                             Layout.fillWidth: true
-                            model: ["Claro (estilo ChatGPT)", "Escuro", "Sistema (padrão do SO)"]
+                            spacing: 8
+                            Repeater {
+                                model: ["Claro", "Escuro", "Sistema"]
+                                delegate: Button {
+                                    required property int index
+                                    required property string modelData
+                                    Layout.fillWidth: true
+                                    implicitHeight: 82
+                                    Accessible.name: "Tema " + modelData
+                                    contentItem: Column {
+                                        spacing: 8
+                                        Text {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: ["☼", "☾", "◐"][index]
+                                            font.pixelSize: 24
+                                            color: theme.text
+                                        }
+                                        Text {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: modelData
+                                            color: theme.text
+                                            font.family: theme.fontFamily
+                                        }
+                                    }
+                                    background: Rectangle {
+                                        radius: 16
+                                        color: themeCombo.currentIndex === index || parent.hovered ? theme.sidebar : "transparent"
+                                        border.color: themeCombo.currentIndex === index ? theme.muted : theme.border
+                                        border.width: parent.visualFocus ? 2 : 1
+                                    }
+                                    onClicked: themeCombo.currentIndex = index
+                                }
+                            }
                         }
 
                         Text {
@@ -137,14 +253,14 @@ Dialog {
                             font.bold: true
                         }
                         Text { text: "Família dos menus:"; color: theme.text }
-                        ComboBox {
+                        HeaderComboBox {
                             id: uiFamilyCombo
                             editable: true
                             Layout.fillWidth: true
                             model: Qt.fontFamilies()
                         }
                         Text { text: "Menus e diálogos (pt):"; color: theme.text }
-                        SpinBox {
+                        AppSpinBox {
                             id: fontSpin
                             from: 9
                             to: 22
@@ -152,28 +268,28 @@ Dialog {
                         }
 
                         Text { text: "Projetos e conversas (pt):"; color: theme.text }
-                        SpinBox {
+                        AppSpinBox {
                             id: sidebarFontSpin
                             from: 9
                             to: 22
                             Layout.preferredWidth: 120
                         }
                         Text { text: "Família das mensagens:"; color: theme.text }
-                        ComboBox {
+                        HeaderComboBox {
                             id: chatFamilyCombo
                             editable: true
                             Layout.fillWidth: true
                             model: Qt.fontFamilies()
                         }
                         Text { text: "Mensagens e escrita (pt):"; color: theme.text }
-                        SpinBox {
+                        AppSpinBox {
                             id: chatFontSpin
                             from: 9
                             to: 28
                             Layout.preferredWidth: 120
                         }
                         Text { text: "Código e saídas (pt):"; color: theme.text }
-                        SpinBox {
+                        AppSpinBox {
                             id: codeFontSpin
                             from: 9
                             to: 28
@@ -188,27 +304,27 @@ Dialog {
                             font.pointSize: 10
                         }
 
-                        Item {}
-                        CheckBox {
+                        AppCheckBox {
                             id: enterToSendCheck
+                            Layout.columnSpan: 2
                             text: "Enter envia a mensagem"
                         }
 
-                        Item {}
-                        CheckBox {
+                        AppCheckBox {
                             id: showReasoningCheck
+                            Layout.columnSpan: 2
                             text: "Mostrar raciocínio dos modelos"
                         }
 
-                        Item {}
-                        CheckBox {
+                        AppCheckBox {
                             id: notifyCheck
+                            Layout.columnSpan: 2
                             text: "Notificar quando uma resposta terminar"
                         }
 
-                        Item {}
-                        CheckBox {
+                        AppCheckBox {
                             id: closeToTrayCheck
+                            Layout.columnSpan: 2
                             text: "Fechar para a bandeja (continuar em segundo plano)"
                         }
 
@@ -235,30 +351,31 @@ Dialog {
 
             Item {
                 ScrollView {
+                    id: audioScroll
                     anchors.fill: parent
                     anchors.margins: 20
 
                     GridLayout {
-                        width: Math.min(680, parent.width)
+                        width: Math.min(680, audioScroll.availableWidth)
                         columns: 2
                         columnSpacing: 12
                         rowSpacing: 14
 
                         Item {}
-                        CheckBox {
+                        AppCheckBox {
                             id: ttsEnabledCheck
                             text: "Ler as respostas em voz alta (TTS)"
                         }
 
                         Text { text: "Voz:"; color: theme.text }
-                        ComboBox {
+                        HeaderComboBox {
                             id: ttsVoiceCombo
                             Layout.fillWidth: true
                             model: app.ttsVoices()
                         }
 
                         Text { text: "Velocidade:"; color: theme.text }
-                        SpinBox {
+                        AppSpinBox {
                             id: ttsRateSpin
                             from: -100
                             to: 100
@@ -299,13 +416,13 @@ Dialog {
                         }
 
                         Item {}
-                        CheckBox {
+                        AppCheckBox {
                             id: sttEnabledCheck
                             text: "Ditado por voz (gravar e transcrever com Whisper)"
                         }
 
                         Text { text: "Comando:"; color: theme.text }
-                        TextField {
+                        AppTextField {
                             id: sttCommandField
                             Layout.fillWidth: true
                             placeholderText: "whisper-cli -m modelo.bin -f {file} -l pt -nt"
@@ -336,7 +453,7 @@ Dialog {
                         columnSpacing: 12
 
                         Text { text: "Nome exibido:"; color: theme.text }
-                        TextField {
+                        AppTextField {
                             id: displayNameField
                             Layout.fillWidth: true
                         }
@@ -361,21 +478,21 @@ Dialog {
                         rowSpacing: 12
 
                         Text { text: "Senha atual:"; color: theme.text }
-                        TextField {
+                        AppTextField {
                             id: oldPasswordField
                             Layout.fillWidth: true
                             echoMode: TextInput.Password
                         }
 
                         Text { text: "Nova senha:"; color: theme.text }
-                        TextField {
+                        AppTextField {
                             id: newPasswordField
                             Layout.fillWidth: true
                             echoMode: TextInput.Password
                         }
 
                         Text { text: "Confirmar:"; color: theme.text }
-                        TextField {
+                        AppTextField {
                             id: confirmPasswordField
                             Layout.fillWidth: true
                             echoMode: TextInput.Password
@@ -403,17 +520,18 @@ Dialog {
 
             Item {
                 ScrollView {
+                    id: connectionScroll
                     anchors.fill: parent
                     anchors.margins: 20
 
                     GridLayout {
-                        width: Math.min(680, parent.width)
+                        width: Math.min(680, connectionScroll.availableWidth)
                         columns: 2
                         columnSpacing: 12
                         rowSpacing: 14
 
                         Text { text: "URL da API:"; color: theme.text }
-                        TextField {
+                        AppTextField {
                             id: apiUrlField
                             Layout.fillWidth: true
                             placeholderText: "https://SEU_DOMINIO/deepseek"
@@ -439,14 +557,14 @@ Dialog {
                         }
 
                         Text { text: "Modelo padrão:"; color: theme.text }
-                        ComboBox {
+                        HeaderComboBox {
                             id: defaultModelCombo
                             Layout.fillWidth: true
                             model: app.models.map(function (m) { return m.id })
                         }
 
                         Text { text: "Permissões padrão da IA:"; color: theme.text }
-                        ComboBox {
+                        HeaderComboBox {
                             id: defaultPermissionCombo
                             Layout.fillWidth: true
                             model: ["Solicitar aprovação", "Aprovar por mim", "Acesso completo"]
@@ -480,7 +598,7 @@ Dialog {
                         }
 
                         Text { text: "Flash — entrada (cache hit):"; color: theme.text }
-                        DoubleSpinBox {
+                        AppDoubleSpinBox {
                             id: flashInputHitSpin
                             from: 0
                             to: 1000
@@ -490,7 +608,7 @@ Dialog {
                         }
 
                         Text { text: "Flash — entrada (cache miss):"; color: theme.text }
-                        DoubleSpinBox {
+                        AppDoubleSpinBox {
                             id: flashInputMissSpin
                             from: 0
                             to: 1000
@@ -500,7 +618,7 @@ Dialog {
                         }
 
                         Text { text: "Flash — saída:"; color: theme.text }
-                        DoubleSpinBox {
+                        AppDoubleSpinBox {
                             id: flashOutputSpin
                             from: 0
                             to: 1000
@@ -510,7 +628,7 @@ Dialog {
                         }
 
                         Text { text: "V4-Pro — entrada (cache hit):"; color: theme.text }
-                        DoubleSpinBox {
+                        AppDoubleSpinBox {
                             id: proInputHitSpin
                             from: 0
                             to: 1000
@@ -520,7 +638,7 @@ Dialog {
                         }
 
                         Text { text: "V4-Pro — entrada (cache miss):"; color: theme.text }
-                        DoubleSpinBox {
+                        AppDoubleSpinBox {
                             id: proInputMissSpin
                             from: 0
                             to: 1000
@@ -530,7 +648,7 @@ Dialog {
                         }
 
                         Text { text: "V4-Pro — saída:"; color: theme.text }
-                        DoubleSpinBox {
+                        AppDoubleSpinBox {
                             id: proOutputSpin
                             from: 0
                             to: 1000
@@ -540,7 +658,7 @@ Dialog {
                         }
 
                         Item {}
-                        CheckBox {
+                        AppCheckBox {
                             id: peakCheck
                             text: "Aplicar preço de pico (dobro) no horário de pico"
                         }
@@ -643,8 +761,16 @@ Dialog {
                               + "conforme o modo de permissão."
                     }
 
-                    RowLayout {
+                    Flow {
+                        Layout.fillWidth: true
                         spacing: 8
+
+                        AppButton {
+                            text: "Adicionar plugin"
+                            icon.source: "qrc:/resources/icons/plus.svg"
+                            primary: true
+                            onClicked: pluginEditor.open()
+                        }
 
                         AppButton {
                             text: "Abrir mcp.json"
@@ -659,7 +785,61 @@ Dialog {
                         }
                     }
 
-                    Item { Layout.fillHeight: true }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: app.mcpServers.length === 0
+                        text: "Nenhum plugin MCP configurado. Abra mcp.json para adicionar um servidor."
+                        color: theme.muted
+                        wrapMode: Text.Wrap
+                    }
+
+                    ListView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: 8
+                        model: app.mcpServers
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: ListView.view.width
+                            implicitHeight: pluginRow.implicitHeight + 24
+                            radius: 12
+                            color: theme.sidebar
+                            RowLayout {
+                                id: pluginRow
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                spacing: 10
+                                Rectangle {
+                                    width: 8; height: 8; radius: 4
+                                    color: modelData.ready ? "#37a46c" : theme.muted
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: modelData.name
+                                        color: theme.text
+                                        font.bold: true
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: modelData.status + " · " + modelData.tools + " ferramentas"
+                                        color: theme.muted
+                                        wrapMode: Text.Wrap
+                                    }
+                                }
+                                AppButton {
+                                    text: modelData.enabled ? "Desativar" : "Ativar"
+                                    ghost: true
+                                    onClicked: app.setMcpServerEnabled(modelData.name, !modelData.enabled)
+                                }
+                            }
+                        }
+                    }
+
                 }
             }
 
@@ -741,6 +921,9 @@ Dialog {
             }
         }
 
+            }
+        }
+
         Rectangle {
             Layout.fillWidth: true
             height: 1
@@ -785,8 +968,50 @@ Dialog {
         }
     }
 
-    Dialog {
+    AppDialog {
+        id: pluginEditor
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: parent ? Math.min(480, parent.width - 48) : 480
+        title: "Adicionar plugin MCP"
+        modal: true
+        contentItem: ColumnLayout {
+            spacing: 12
+            Text {
+                Layout.fillWidth: true
+                text: "Configure um servidor MCP stdio instalado no computador. Ao adicionar, o executável será iniciado."
+                color: theme.muted
+                wrapMode: Text.Wrap
+            }
+            AppTextField { id: pluginName; Layout.fillWidth: true; placeholderText: "Nome (letras, números ou _)" }
+            AppTextField { id: pluginCommand; Layout.fillWidth: true; placeholderText: "Executável ou caminho do servidor" }
+            AppTextField { id: pluginArguments; Layout.fillWidth: true; placeholderText: "Argumentos (opcional)" }
+            Text {
+                Layout.fillWidth: true
+                text: "Separe os argumentos por espaços; use aspas duplas para caminhos com espaços. Variáveis de ambiente e pasta de trabalho podem ser definidas em mcp.json."
+                color: theme.muted
+                wrapMode: Text.Wrap
+            }
+            RowLayout {
+                Item { Layout.fillWidth: true }
+                AppButton { text: "Cancelar"; ghost: true; onClicked: pluginEditor.close() }
+                AppButton {
+                    text: "Adicionar"
+                    primary: true
+                    enabled: pluginName.text.trim().length > 0 && pluginCommand.text.trim().length > 0
+                    onClicked: {
+                        if (app.addMcpServer(pluginName.text, pluginCommand.text, pluginArguments.text)) {
+                            pluginName.clear(); pluginCommand.clear(); pluginArguments.clear(); pluginEditor.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    AppDialog {
         id: globalCommandEditor
+        objectName: "globalCommandEditor"
         modal: true
         anchors.centerIn: parent
         width: 460
@@ -807,7 +1032,7 @@ Dialog {
             width: parent.width
             spacing: 10
 
-            TextField {
+            AppTextField {
                 id: globalCommandName
                 Layout.fillWidth: true
                 placeholderText: "nome (sem /)"

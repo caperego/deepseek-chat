@@ -32,8 +32,9 @@
 
 1. `POST /auth/login` → backend valida (bcrypt; migra PBKDF2 legado) e devolve um
    token de 32 bytes. Só o `sha256` é gravado em `api_tokens` (com validade).
-2. O app guarda o token no `config.ini` **criptografado** (Windows: DPAPI; Linux/macOS:
-   base64 + permissão 600 no arquivo) e usa `Authorization: Bearer …` em tudo.
+2. O app guarda o token no `config.ini` com DPAPI no Windows; no Linux/macOS,
+   usa base64 e permissão 600 no arquivo. Base64 não fornece criptografia.
+   As chamadas autenticadas usam `Authorization: Bearer …`.
 3. `tryAutoLogin()` valida o token em `GET /me` ao abrir o app.
 
 ## Fluxo de conversa (agente)

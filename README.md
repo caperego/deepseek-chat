@@ -9,6 +9,28 @@ Autor: **Carlos Alberto Perego** — [carlos.pw](https://carlos.pw)
 
 ---
 
+## Interface
+
+A versão 1.2.0 unifica os controles e reorganiza a navegação e as configurações,
+tomando o [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) como
+referência visual. O cliente continua sendo um aplicativo Qt independente; os
+plugins disponíveis são servidores MCP stdio, e não bundles Cordis do Harness.
+
+As imagens abaixo são capturas do aplicativo com dados fictícios, sem conta real.
+
+![Conversa no tema claro](docs/images/chat-claro.png)
+
+| Configurações | Automações |
+|---|---|
+| ![Configurações](docs/images/configuracoes-claro.png) | ![Automações](docs/images/automacoes-claro.png) |
+
+| Tema escuro | Plugins MCP |
+|---|---|
+| ![Tema escuro](docs/images/chat-escuro.png) | ![Plugins MCP](docs/images/plugins-claro.png) |
+
+Para reproduzir as capturas e consultar os cenários verificados, veja
+[`docs/REVISAO-1.2.0.md`](docs/REVISAO-1.2.0.md).
+
 ## Recursos
 
 **Chat**
@@ -40,18 +62,28 @@ A prévia HTML usa o texto rico do Qt e não executa JavaScript nem CSS avançad
   `browse_url` (Edge/Chrome headless com fallback). Páginas consultadas aparecem
   com link e trecho junto à resposta.
 - **MCP** (Model Context Protocol, stdio): tools, resources e prompts de servidores
-  configurados em `mcp.json`.
+  configurados em `mcp.json`. É possível adicionar e ativar/desativar servidores em
+  **Configurações → Plugins MCP**, com estado da conexão e contagem de ferramentas.
+- Respostas MCP isoladas por servidor, timeout de chamadas e recuperação quando
+  um servidor encerra. Recarregar plugins durante chamadas pendentes é bloqueado.
 - **Permissões por projeto**: *Solicitar aprovação*, *Aprovar por mim* e
   *Acesso completo*, com "não perguntar nesta conversa" e "sempre permitir neste projeto".
 - Comandos destrutivos conhecidos (`rm -rf /`, `format`, `del /s`, fork bombs…)
   pedem confirmação **mesmo** em Acesso completo.
 
 **Aplicativo**
-- Login multiusuário; token **criptografado** no `config.ini` (DPAPI no Windows).
+- Login multiusuário; token protegido por DPAPI no Windows. No Linux/macOS,
+  o armazenamento usa base64 e permissões restritas no `config.ini`; base64 não é criptografia.
 - Bandeja do sistema: fechar minimiza e continua em segundo plano; notificações de
   resposta pronta; menu Abrir/Sair.
 - **Atualização automática** (Windows): baixa, extrai, substitui e reabre o app.
 - Tema claro/escuro/sistema, TTS e ditado por voz (Whisper externo).
+- **Automações locais**: tarefas únicas, horárias, diárias ou semanais, cada uma
+  em uma conversa própria. Permite pausar, parar, excluir e abrir resultados.
+  Requer aplicativo aberto e conta conectada. Agendamentos são separados por
+  backend e usuário; ações que exigem permissão pedem aprovação.
+- Streaming com atualizações visuais agrupadas a cada 33 ms; saída de comandos
+  drenada continuamente com retenção limitada do início e do final.
 
 ---
 
@@ -90,7 +122,7 @@ docs/                     documentação (arquitetura, API, ferramentas)
 
 ## Requisitos
 
-- **Qt 6** (Core, Gui, Widgets, Quick, Qml, Network, Multimedia, TextToSpeech, Svg, Pdf)
+- **Qt 6.11+** (Core, Gui, Widgets, Quick, Qml, Network, Multimedia, TextToSpeech, Svg, Pdf)
 - Compilador C++17 (MinGW 64 ou MSVC; gcc/clang no Linux/macOS)
 - Servidor com **PHP 8+**, MariaDB/MySQL e um site HTTPS para o backend
 
@@ -135,7 +167,7 @@ Passo a passo completo (dependências por sistema, áudio, troubleshooting):
 ```ini
 [api]
 base_url=https://SEU_DOMINIO/deepseek
-token=            ; gravado criptografado após o login
+token=            ; gravado após o login (DPAPI no Windows; base64 no Linux/macOS)
 
 [ui]
 permission_mode=ask    ; ask | auto | full (padrão para projetos novos)

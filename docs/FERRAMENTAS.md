@@ -6,7 +6,7 @@
 |---|---|---|
 | `list_files` | `path?`, `recursive?` | lista pastas/arquivos (até 500 itens) |
 | `read_file` | `path`, `start_line?`, `end_line?` | lê texto (até 512 KB; recusa binário) |
-| `write_file` | `path`, `content` | cria/sobrescreve (backup automático, até 2 MB) |
+| `write_file` | `path`, `content` | cria/sobrescreve com gravação atômica e backup automático (até 2 MB) |
 | `find_files` | `name_glob`, `path?` | procura arquivos por nome (glob) |
 | `grep_files` | `pattern` (regex), `path?`, `ignore_case?`, `max_results?` | procura no conteúdo |
 | `restore_file` | `path` | restaura a versão anterior (backup) |
@@ -17,7 +17,10 @@
 | `browse_url` | `url` | página via navegador **headless** (Edge/Chrome; fallback `fetch_url`) |
 | `mcp__servidor__*` | conforme o servidor MCP | ferramentas, resources e prompts MCP |
 
-Limites: saída de comando 100 KB; resultados de ferramenta exibidos até 20 KB no cartão.
+Limites: a saída de comandos é drenada continuamente, retendo 100 KiB de bytes
+do início e do final, mais um marcador quando truncada. A representação em texto
+ou JSON pode ter tamanho diferente após decodificação e escape. Resultados de
+ferramenta são exibidos até 20 KB no cartão.
 Gravações guardam até 5 backups por arquivo em `%APPDATA%/DeepSeekChat/backups`.
 
 ## Como o agente é instruído
@@ -44,6 +47,13 @@ No início de cada mensagem o app envia um bloco de contexto com:
 \* comandos que casam com a blocklist (ex.: `rm -rf /`, `format c:`, `del /s`,
 `mkfs`, `dd if=`, `diskpart`, `reg delete`, `shutdown`, fork bombs) **pedem confirmação
 mesmo em Acesso completo**, com o título "Comando potencialmente PERIGOSO".
+Essa confirmação também prevalece sobre permissões persistentes e da sessão.
+
+Para verificar se um caminho pertence ao projeto, o aplicativo resolve links
+simbólicos e o ancestral existente de arquivos novos. Essa verificação orienta
+as aprovações: não é uma sandbox do sistema operacional e não impede mudanças
+nos caminhos entre a verificação e a execução. A lista de comandos perigosos é
+limitada a padrões conhecidos e não detecta todos os comandos destrutivos.
 
 ## Aprovações
 
@@ -58,3 +68,18 @@ mesmo em Acesso completo**, com o título "Comando potencialmente PERIGOSO".
 Botão **Terminal** na barra lateral: shell interativo (ConPTY no Windows, `openpty`
 no Linux), saída ao vivo, enviar comandos e parar. É ação do usuário — não passa
 pela fila de aprovação.
+
+## Plugins MCP
+
+Em **Configurações → Plugins MCP**, adicione um nome, executável e argumentos.
+O aplicativo inicia o executável ao confirmar. É possível ativar/desativar
+servidores e consultar estado e número de ferramentas. A configuração é gravada
+em `mcp.json`, ao lado de `config.ini`; campos avançados `env` e `cwd` são
+preservados ao ativar/desativar um servidor. Nomes novos usam letras, números e `_`.
+
+Cada entrada aceita `disabled: true` e `timeoutMs` (padrão: 60.000 ms; entre
+1.000 e 600.000 ms). A inicialização espera até 15 segundos. Falhas e encerramento
+devolvem erro à chamada pendente, em vez de deixar a conversa esperando sem fim.
+O cliente não recarrega servidores enquanto houver chamadas pendentes.
+
+Plugins Cordis do Harness não são compatíveis diretamente com MCP stdio.

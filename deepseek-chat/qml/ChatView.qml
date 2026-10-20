@@ -26,7 +26,7 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             height: Math.max(62, theme.fontSize * 2 + 28)
-            color: theme.card
+            color: theme.bg
 
             Rectangle {
                 width: parent.width
@@ -53,7 +53,7 @@ Item {
 
                 AppButton {
                     visible: app.currentParentId > 0
-                    text: "↶ Retroceder versão"
+                    text: view.width < 850 ? "↶" : "↶ Retroceder versão"
                     ghost: true
                     ToolTip.visible: hovered
                     ToolTip.text: "Voltar à versão anterior sem apagar esta versão"
@@ -176,26 +176,23 @@ Item {
                     }
                 }
 
-                Text {
-                    text: "Modelo:"
-                    color: theme.muted
-                }
-
-                ComboBox {
+                HeaderComboBox {
                     id: modelCombo
-                    Layout.preferredWidth: 190
+                    objectName: "modelSelector"
+                    Layout.preferredWidth: Math.min(190, view.width * 0.28)
+                    Accessible.name: "Modelo"
+                    ToolTip.text: "Modelo"
+                    ToolTip.visible: hovered
                     model: app.models.map(function (m) { return m.id })
                     onActivated: app.currentModel = currentText
                 }
 
-                Text {
-                    text: "Esforço:"
-                    color: theme.muted
-                }
-
-                ComboBox {
+                HeaderComboBox {
                     id: effortCombo
-                    Layout.preferredWidth: 110
+                    Layout.preferredWidth: Math.min(110, view.width * 0.17)
+                    Accessible.name: "Esforço"
+                    ToolTip.text: "Esforço"
+                    ToolTip.visible: hovered
                     model: app.efforts
                     onActivated: app.currentEffort = currentText
                 }
@@ -236,13 +233,13 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            color: theme.card
+            color: theme.bg
             implicitHeight: composer.implicitHeight + 24
 
             Rectangle {
                 width: parent.width
                 height: 1
-                color: theme.border
+                color: "transparent"
             }
 
             ColumnLayout {
@@ -413,11 +410,11 @@ Item {
                         wrapMode: TextArea.Wrap
                         font.pointSize: theme.chatFontSize
                         font.family: theme.chatFontFamily
-                        onTextChanged: view.updateLinks()
+                        onTextChanged: linkTimer.restart()
 
                         background: Rectangle {
-                            radius: 12
-                            color: theme.dark ? "#2a2a2a" : "#f7f7f8"
+                            radius: 16
+                            color: theme.card
                             border.width: composerDrop.containsDrag ? 2 : 1
                             border.color: composerDrop.containsDrag ? theme.accent : theme.border
                         }
@@ -449,18 +446,28 @@ Item {
                     }
                 }
 
+                Timer {
+                    id: linkTimer
+                    interval: 150
+                    onTriggered: view.updateLinks()
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
 
                     AppButton {
-                        text: "Anexar"
+                        text: view.width < 640 ? "" : "Anexar"
+                        ToolTip.text: "Anexar arquivos"
+                        ToolTip.visible: hovered
                         icon.source: "qrc:/resources/icons/paperclip.svg"
                         onClicked: app.attachFiles()
                     }
 
                     AppButton {
-                        text: "Capturar"
+                        text: view.width < 740 ? "" : "Capturar"
+                        ToolTip.text: "Capturar tela"
+                        ToolTip.visible: hovered
                         icon.source: "qrc:/resources/icons/image.svg"
                         onClicked: captureMenu.popup()
 

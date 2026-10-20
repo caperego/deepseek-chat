@@ -170,7 +170,7 @@ Item {
         s = s.replace(/__([^_\n]+)__/g, "<b>$1</b>")
         s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1<i>$2</i>")
         s = s.replace(/~~([^~\n]+)~~/g, "<s>$1</s>")
-        s = s.replace(/(^|[^"=])(https?:\/\/[^\s<"]+)/g, '$1<a href="$2">$2</a>')
+        s = s.replace(/(^|[^"=])(https?:\/\/[^\s<"]+)/g, '$1<a style="color:' + theme.accent + ';" href="$2">$2</a>')
         s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (match, alt, src) {
             var url = delegate.imageUrl(src)
             if (url.length === 0)
@@ -198,7 +198,7 @@ Item {
                 var languageLabel = lang.length > 0 ? lang.toUpperCase() : "CÓDIGO"
                 out += '<table width="100%" cellspacing="0" cellpadding="8" bgcolor="'
                         + codeBg + '"><tr><td><b>' + languageLabel + '</b></td><td align="right">'
-                        + '<a href="copy-code:' + codeIndex + '">⧉ Copiar código</a></td></tr>'
+                        + '<a style="color:' + theme.muted + ';text-decoration:none;" href="copy-code:' + codeIndex + '">⧉ Copiar código</a></td></tr>'
                         + '<tr><td colspan="2"><pre style="color:' + codeFg
                         + ';font-family:Consolas;font-size:' + theme.codeFontSize
                         + 'pt;white-space:pre;margin:0;">'
@@ -762,7 +762,7 @@ Item {
                     }
                 }
 
-                Dialog {
+                AppDialog {
                     id: previewDialog
                     parent: Overlay.overlay
                     title: fileCard.modelData.path
@@ -789,7 +789,7 @@ Item {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: editDialog
         parent: Overlay.overlay
         modal: true

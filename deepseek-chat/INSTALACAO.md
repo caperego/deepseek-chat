@@ -277,10 +277,12 @@ bash linux/package.sh
 ```
 
 Os arquivos `.run`, `.tar.gz` e os hashes SHA-256 ficam em `dist/`.
-Execute `bash dist/deepseek-chat-1.1.12-linux-x86_64.run` para instalar
+Execute `bash dist/deepseek-chat-1.2.0-linux-x86_64.run` para instalar
 em `~/.local/share/deepseek-chat`, com atalho no menu e em `~/.local/bin`.
 O instalador preserva as configurações nas atualizações e não inclui credenciais
 da máquina de compilação. Configure a URL do backend no aplicativo após instalar.
+É possível instalar com a versão anterior aberta; feche o aplicativo completamente
+e abra novamente para carregar a atualização. Esta versão requer Qt 6.11 ou superior.
 
 O pacote utiliza Qt e glibc do sistema. A compilação feita no Manjaro/Arch
 requer bibliotecas compatíveis; para outras distribuições, gere o pacote nelas.

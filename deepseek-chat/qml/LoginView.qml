@@ -52,12 +52,12 @@ Item {
                 Layout.alignment: Qt.AlignHCenter
             }
 
-            TabBar {
+            AppTabBar {
                 id: tabs
                 Layout.fillWidth: true
 
-                TabButton { text: "Entrar" }
-                TabButton { text: "Criar conta" }
+                AppTabButton { text: "Entrar" }
+                AppTabButton { text: "Criar conta" }
             }
 
             StackLayout {
@@ -67,13 +67,13 @@ Item {
                 ColumnLayout {
                     spacing: 10
 
-                    TextField {
+                    AppTextField {
                         id: loginUser
                         placeholderText: "usuário"
                         Layout.fillWidth: true
                     }
 
-                    TextField {
+                    AppTextField {
                         id: loginPass
                         placeholderText: "senha"
                         echoMode: TextInput.Password
@@ -97,26 +97,26 @@ Item {
                 ColumnLayout {
                     spacing: 10
 
-                    TextField {
+                    AppTextField {
                         id: regUser
                         placeholderText: "usuário (mínimo 3 caracteres)"
                         Layout.fillWidth: true
                     }
 
-                    TextField {
+                    AppTextField {
                         id: regName
                         placeholderText: "nome (opcional)"
                         Layout.fillWidth: true
                     }
 
-                    TextField {
+                    AppTextField {
                         id: regPass
                         placeholderText: "senha"
                         echoMode: TextInput.Password
                         Layout.fillWidth: true
                     }
 
-                    TextField {
+                    AppTextField {
                         id: regPass2
                         placeholderText: "confirmar senha"
                         echoMode: TextInput.Password

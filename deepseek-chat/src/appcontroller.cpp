@@ -1,7 +1,9 @@
 #include "appcontroller.h"
+#include "boundedoutput.h"
 #include "apiclient.h"
 #include "assets.h"
 #include "config.h"
+#include "pathpolicy.h"
 #include "qmltheme.h"
 #include "streamclient.h"
 
@@ -73,7 +75,7 @@
 
 namespace {
 
-const char *kAppVersion = "1.1.12";
+const char *kAppVersion = "1.2.0";
 const int kMaxAgentRounds = 12;
 const int kMaxListEntries = 500;
 const int kMaxReadBytes = 512 * 1024;
@@ -648,6 +650,21 @@ const QRegularExpression &fileBlockRegex()
 MessageListModel::MessageListModel(QObject *parent)
     : QAbstractListModel(parent)
 {
+    m_updateTimer = new QTimer(this);
+    m_updateTimer->setSingleShot(true);
+    m_updateTimer->setInterval(33);
+    connect(m_updateTimer, &QTimer::timeout, this, &MessageListModel::flushPendingUpdate);
+}
+
+void MessageListModel::flushPendingUpdate()
+{
+    m_updateTimer->stop();
+    const int row = m_pendingRow;
+    m_pendingRow = -1;
+    if (row >= 0 && row < m_items.size()) {
+        const QModelIndex idx = index(row, 0);
+        emit dataChanged(idx, idx, {ContentRole, DisplayContentRole, FilesRole, ReasoningRole});
+    }
 }
 
 int MessageListModel::rowCount(const QModelIndex &parent) const
@@ -743,6 +760,8 @@ QHash<int, QByteArray> MessageListModel::roleNames() const
 
 void MessageListModel::setMessages(const QVector<Message> &messages)
 {
+    m_updateTimer->stop();
+    m_pendingRow = -1;
     beginResetModel();
     m_items.clear();
     for (const Message &message : messages) {
@@ -762,6 +781,8 @@ void MessageListModel::setMessages(const QVector<Message> &messages)
 
 void MessageListModel::clearMessages()
 {
+    m_updateTimer->stop();
+    m_pendingRow = -1;
     beginResetModel();
     m_items.clear();
     endResetModel();
@@ -769,6 +790,7 @@ void MessageListModel::clearMessages()
 
 void MessageListModel::beginAssistant()
 {
+    flushPendingUpdate();
     beginInsertRows(QModelIndex(), m_items.size(), m_items.size());
     Item item;
     item.role = QStringLiteral("assistant");
@@ -783,8 +805,8 @@ void MessageListModel::appendChunk(const QString &chunk)
         return;
     const int row = m_items.size() - 1;
     m_items[row].content += chunk;
-    const QModelIndex idx = index(row, 0);
-    emit dataChanged(idx, idx, {ContentRole, DisplayContentRole, FilesRole});
+    m_pendingRow = row;
+    if (!m_updateTimer->isActive()) m_updateTimer->start();
 }
 
 void MessageListModel::appendReasoning(const QString &chunk)
@@ -793,13 +815,15 @@ void MessageListModel::appendReasoning(const QString &chunk)
         return;
     const int row = m_items.size() - 1;
     m_items[row].reasoning += chunk;
-    const QModelIndex idx = index(row, 0);
-    emit dataChanged(idx, idx, {ReasoningRole});
+    m_pendingRow = row;
+    if (!m_updateTimer->isActive()) m_updateTimer->start();
 }
 
 void MessageListModel::finishAssistant(const QString &fullText,
                                        const QString &fullReasoning)
 {
+    m_updateTimer->stop();
+    m_pendingRow = -1;
     if (m_items.isEmpty())
         return;
     const int row = m_items.size() - 1;
@@ -813,6 +837,7 @@ void MessageListModel::finishAssistant(const QString &fullText,
 
 void MessageListModel::failAssistant(const QString &error)
 {
+    flushPendingUpdate();
     if (m_items.isEmpty())
         return;
     const int row = m_items.size() - 1;
@@ -824,6 +849,7 @@ void MessageListModel::failAssistant(const QString &error)
 
 void MessageListModel::appendTool(const QString &text, const QString &detail)
 {
+    flushPendingUpdate();
     beginInsertRows(QModelIndex(), m_items.size(), m_items.size());
     Item item;
     item.role = QStringLiteral("tool");
@@ -849,6 +875,8 @@ void MessageListModel::updateLastTool(const QString &text, const QString &detail
 
 void MessageListModel::removeLast()
 {
+    m_updateTimer->stop();
+    m_pendingRow = -1;
     if (m_items.isEmpty())
         return;
     const int row = m_items.size() - 1;
@@ -859,6 +887,7 @@ void MessageListModel::removeLast()
 
 void MessageListModel::resumeAssistant(const QString &text, const QString &reasoning)
 {
+    flushPendingUpdate();
     beginInsertRows(QModelIndex(), m_items.size(), m_items.size());
     Item item;
     item.role = QStringLiteral("assistant");
@@ -918,6 +947,27 @@ AppController::AppController(QObject *parent)
     }
 
     loadMcpServers();
+    auto *automationTimer = new QTimer(this);
+    automationTimer->setInterval(15000);
+    connect(automationTimer, &QTimer::timeout, this, &AppController::pollAutomations);
+    automationTimer->start();
+}
+
+AppController::~AppController()
+{
+    destroyAllRuns();
+    for (McpServer *server : m_mcpServers) {
+        if (server->process) {
+            QObject::disconnect(server->process, nullptr, this, nullptr);
+            if (server->process->state() != QProcess::NotRunning) {
+                server->process->kill();
+                server->process->waitForFinished(1000);
+            }
+            delete server->process;
+        }
+        delete server;
+    }
+    delete m_trayMenu;
 }
 
 void AppController::setWindow(QWindow *window)
@@ -1123,6 +1173,14 @@ void AppController::tryAutoLogin()
 void AppController::afterLogin(const User &user)
 {
     m_user = user;
+    m_automationBackend = Config::instance().api().baseUrl;
+    const QByteArray scope = QCryptographicHash::hash(
+        (Config::instance().api().baseUrl + QLatin1Char('/') + QString::number(user.id)).toUtf8(),
+        QCryptographicHash::Sha256).toHex();
+    if (!m_automations.load(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                            + QStringLiteral("/automations/") + QString::fromLatin1(scope) + QStringLiteral(".json")))
+        emit toast(m_automations.error());
+    emit automationsChanged();
 
     Config &config = Config::instance();
     config.api().token = m_api->token();
@@ -1193,6 +1251,9 @@ void AppController::logout()
     m_workdirFiles.clear();
     m_balanceInfo.clear();
     destroyAllRuns();
+    m_automations.load(QString());
+    m_automationBackend.clear();
+    emit automationsChanged();
     m_activeProject = Project();
     m_activeProjectId = 0;
     m_currentParentId = 0;
@@ -1946,6 +2007,16 @@ void AppController::destroyRun(AgentRun *run)
         return;
 
     removeApprovalsFor(run);
+    if (!run->automationId.isEmpty()) {
+        m_automations.complete(run->automationId, QStringLiteral("Cancelada"), run->conversationId);
+        emit automationsChanged();
+    }
+    for (const auto &key : m_mcpCallRuns.keys()) {
+        if (m_mcpCallRuns.value(key) == run) {
+            m_mcpCallRuns.remove(key);
+            m_mcpCallTools.remove(key);
+        }
+    }
 
     if (run->process) {
         QProcess *process = run->process;
@@ -2084,12 +2155,130 @@ void AppController::startRun(const QString &title, bool persistUser)
     }
     run->messages += history;
 
+    connectRun(run);
+}
+
+bool AppController::addAutomation(const QString &title, const QString &prompt,
+                                  int delayMinutes, int repeatMinutes, qint64 projectId)
+{
+    if (!loggedIn()) { emit toast(QStringLiteral("Entre na sua conta para agendar tarefas.")); return false; }
+    if (m_automationBackend != Config::instance().api().baseUrl) {
+        emit toast(QStringLiteral("Entre novamente após trocar a conexão para agendar tarefas."));
+        return false;
+    }
+    const bool saved = m_automations.add(title, prompt, delayMinutes, repeatMinutes,
+                                         projectId, m_currentModel, m_currentEffort,
+                                         QDateTime::currentMSecsSinceEpoch());
+    if (!saved) emit toast(m_automations.error());
+    emit automationsChanged();
+    return saved;
+}
+
+void AppController::toggleAutomation(const QString &id)
+{
+    if (!m_automations.toggle(id)) emit toast(m_automations.error());
+    emit automationsChanged();
+}
+
+void AppController::removeAutomation(const QString &id)
+{
+    for (const auto *run : m_runs)
+        if (run->automationId == id) return;
+    if (!m_automations.remove(id)) emit toast(m_automations.error());
+    emit automationsChanged();
+}
+
+void AppController::stopAutomation(const QString &id)
+{
+    for (AgentRun *run : m_runs)
+        if (run->automationId == id) { stopRun(run); return; }
+}
+
+void AppController::pollAutomations()
+{
+    if (!loggedIn() || m_restoringSession || m_pollingAutomations) return;
+    if (m_automationBackend != Config::instance().api().baseUrl) return;
+    m_pollingAutomations = true;
+    const auto guard = qScopeGuard([this] { m_pollingAutomations = false; });
+    const auto account = m_user.id;
+    const QString token = m_api->token();
+    const QString backend = Config::instance().api().baseUrl;
+    const auto due = m_automations.claimDue(QDateTime::currentMSecsSinceEpoch(), qMax(0, 3 - int(m_runs.size())));
+    if (!due.isEmpty()) emit automationsChanged();
+    for (const auto &task : due) {
+        if (m_user.id != account || m_api->token() != token || Config::instance().api().baseUrl != backend) break;
+        runAutomation(task.toMap());
+    }
+}
+
+void AppController::runAutomation(const QVariantMap &task)
+{
+    const QString id = task.value(QStringLiteral("id")).toString();
+    const qint64 projectId = task.value(QStringLiteral("projectId")).toLongLong();
+    Project project;
+    bool found = projectId == 0;
+    for (const Project &candidate : m_projectList)
+        if (candidate.id == projectId) { project = candidate; found = true; break; }
+    if (!found) {
+        m_automations.complete(id, QStringLiteral("Falha: projeto não disponível"));
+        emit automationsChanged();
+        return;
+    }
+    QString error;
+    qint64 conversationId = 0;
+    const auto account = m_user.id;
+    const QString token = m_api->token();
+    const QString title = task.value(QStringLiteral("title")).toString();
+    const QString model = task.value(QStringLiteral("model")).toString();
+    const QString effort = task.value(QStringLiteral("effort")).toString();
+    const bool created = m_api->createConversation(projectId, title, model, effort, &conversationId, &error);
+    if (m_user.id != account || m_api->token() != token
+        || m_automationBackend != Config::instance().api().baseUrl) return;
+    if (!created || conversationId <= 0) {
+        m_automations.complete(id, QStringLiteral("Falha ao criar conversa: ") + error);
+        emit automationsChanged();
+        return;
+    }
+    if (!m_automations.setConversation(id, conversationId)) {
+        emit toast(m_automations.error());
+        return;
+    }
+    emit automationsChanged();
+    auto *run = new AgentRun;
+    run->automationId = id;
+    run->conversationId = conversationId;
+    run->projectId = projectId;
+    run->title = title;
+    run->model = model;
+    run->effort = effort;
+    run->workdir = project.workdir;
+    run->permissionMode = QStringLiteral("ask");
+    run->allowImages = false;
+    run->toolsEnabled = !model.contains(QLatin1String("reasoner"), Qt::CaseInsensitive);
+    Message system;
+    system.role = QStringLiteral("system");
+    system.content = Config::instance().ui().globalInstructions + QStringLiteral("\n\n")
+        + project.systemPrompt + QStringLiteral("\n\nEsta é uma tarefa agendada. Pasta de trabalho: ")
+        + (project.workdir.isEmpty() ? QStringLiteral("não definida; use caminhos absolutos") : project.workdir)
+        + QStringLiteral(". Use as ferramentas disponíveis para executar a instrução. "
+                         "Informe resultados e falhas com clareza. Ações exigem aprovação do usuário.");
+    run->messages.append(system);
+    Message prompt;
+    prompt.role = QStringLiteral("user");
+    prompt.content = task.value(QStringLiteral("prompt")).toString();
+    run->messages.append(prompt);
+    connectRun(run);
+    emit toast(QStringLiteral("Automação iniciada: ") + title);
+}
+
+void AppController::connectRun(AgentRun *run)
+{
     run->stream = new StreamClient(this);
     run->stream->setBaseUrl(Config::instance().api().baseUrl);
     run->stream->setToken(m_api->token());
 
     connect(run->stream, &StreamClient::metaReceived, this, [this, run](qint64 id) {
-        if (m_currentConversationId == 0) {
+        if (m_currentConversationId == 0 && run->conversationId == 0) {
             m_currentConversationId = id;
             emit currentConversationChanged();
         }
@@ -2198,6 +2387,11 @@ void AppController::onRunFinished(AgentRun *run, const QString &fullText,
 
 void AppController::failRun(AgentRun *run, const QString &error)
 {
+    if (!run->automationId.isEmpty()) {
+        m_automations.complete(run->automationId, QStringLiteral("Falha: ") + error, run->conversationId);
+        run->automationId.clear();
+        emit automationsChanged();
+    }
     if (displayingRun(run)) {
         if (m_messages->lastRole() != QLatin1String("assistant"))
             m_messages->beginAssistant();
@@ -2219,6 +2413,13 @@ void AppController::failRun(AgentRun *run, const QString &error)
 void AppController::finishRun(AgentRun *run, const QString &fullText,
                               const QString &fullReasoning)
 {
+    if (!run->automationId.isEmpty()) {
+        m_automations.complete(run->automationId,
+                              run->aborted ? QStringLiteral("Cancelada") : QStringLiteral("Concluída"),
+                              run->conversationId);
+        run->automationId.clear();
+        emit automationsChanged();
+    }
     const qint64 streamConversation = run->conversationId;
     const bool displaying = displayingRun(run);
     const QString runTitle = run->title;
@@ -2304,7 +2505,12 @@ void AppController::runNextTool(AgentRun *run)
 void AppController::executeToolCall(AgentRun *run, const ToolCall &call)
 {
     bool outside = false;
-    if (toolNeedsApproval(run, call, &outside) && !run->autoApprove) {
+    QString parseError;
+    const bool dangerous = call.name == QLatin1String("run_command")
+        && isDangerousCommand(parseArguments(call, &parseError)
+                                  .value(QStringLiteral("command")).toString())
+        && parseError.isEmpty();
+    if (toolNeedsApproval(run, call, &outside) && (dangerous || !run->autoApprove)) {
         QString diff;
         if (call.name == QLatin1String("write_file")) {
             QString parseError;
@@ -2493,9 +2699,9 @@ void AppController::resolveApprovalEx(bool allow, bool alwaysSession,
 
     ApprovalRequest request = m_approvals.takeFirst();
     m_approvalShown = false;
-    if (alwaysSession && request.run)
+    if (allow && alwaysSession && request.run)
         request.run->autoApprove = true;
-    if (alwaysProject && request.run && !request.toolName.isEmpty())
+    if (allow && alwaysProject && request.run && !request.toolName.isEmpty())
         Config::instance().allowToolForProject(request.run->projectId,
                                                request.toolName);
 
@@ -2507,7 +2713,11 @@ void AppController::resolveApprovalEx(bool allow, bool alwaysSession,
 
 void AppController::stop()
 {
-    AgentRun *run = runFor(m_currentConversationId);
+    stopRun(runFor(m_currentConversationId));
+}
+
+void AppController::stopRun(AgentRun *run)
+{
     if (!run)
         return;
 
@@ -2515,17 +2725,19 @@ void AppController::stop()
     bool waitingApproval = false;
     for (const ApprovalRequest &request : m_approvals)
         waitingApproval |= request.run == run;
-    if (run->process)
-        run->process->kill();
-    if (run->stream)
-        run->stream->cancel();
-
+    const bool waitingMcp = m_mcpCallRuns.values().contains(run);
     removeApprovalsFor(run);
-    if (waitingApproval) {
+    if (waitingApproval || waitingMcp) {
         if (displayingRun(run) && m_messages->lastRole() == QLatin1String("tool"))
             m_messages->updateLastTool(QStringLiteral("Ação cancelada pelo usuário."), QString());
         finishRun(run, QString(), QString());
+        return;
     }
+    if (run->process)
+        run->process->kill();
+    // cancel() may synchronously finish and destroy the run: keep it last.
+    if (run->stream)
+        run->stream->cancel();
 }
 
 QString AppController::diffText(const QString &before, const QString &after)
@@ -3518,6 +3730,55 @@ QString AppController::artifactPreviewUrl(const QString &edited) const
            + QString::fromLatin1(edited.toUtf8().toBase64());
 }
 
+QVariantList AppController::mcpServers() const
+{
+    QVariantList result;
+    for (const McpServer *server : m_mcpServers) {
+        int tools = 0;
+        for (const McpTool &tool : m_mcpTools)
+            if (tool.server == server->name)
+                ++tools;
+        result.append(QVariantMap{{QStringLiteral("name"), server->name},
+                                  {QStringLiteral("status"), server->status},
+                                  {QStringLiteral("ready"), server->initialized},
+                                  {QStringLiteral("enabled"), !server->config.value(QStringLiteral("disabled")).toBool()},
+                                  {QStringLiteral("tools"), tools}});
+    }
+    return result;
+}
+
+void AppController::trackMcpCall(McpServer *server, int id, AgentRun *run,
+                                  const QString &tool)
+{
+    const auto key = qMakePair(server->name, id);
+    m_mcpCallRuns.insert(key, run);
+    m_mcpCallTools.insert(key, tool);
+    const int timeout = qBound(1000, server->config.value(QStringLiteral("timeoutMs")).toInt(60000), 600000);
+    QTimer::singleShot(timeout, this, [this, key] {
+        AgentRun *pending = m_mcpCallRuns.take(key);
+        const QString toolName = m_mcpCallTools.take(key);
+        if (pending)
+            finishToolCall(pending, QStringLiteral("{\"error\":\"O plugin excedeu o tempo limite.\"}"),
+                           QStringLiteral("⚙ %1: tempo limite MCP").arg(toolName));
+    });
+}
+
+void AppController::failMcpCalls(McpServer *server, const QString &reason)
+{
+    // Take requests before resuming agent work, which can enqueue new calls.
+    QVector<QPair<AgentRun *, QString>> failed;
+    for (const auto &key : m_mcpCallRuns.keys()) {
+        if (key.first == server->name) {
+            failed.append(qMakePair(m_mcpCallRuns.take(key), m_mcpCallTools.take(key)));
+        }
+    }
+    for (const auto &call : failed) {
+        if (m_runs.contains(call.first))
+            finishToolCall(call.first, QStringLiteral("{\"error\":%1}").arg(jsonQuote(reason)),
+                           QStringLiteral("⚙ %1: plugin indisponível").arg(call.second));
+    }
+}
+
 void AppController::loadMcpServers()
 {
     for (McpServer *server : m_mcpServers) {
@@ -3532,6 +3793,7 @@ void AppController::loadMcpServers()
     m_mcpTools.clear();
     m_mcpCallRuns.clear();
     m_mcpCallTools.clear();
+    emit mcpServersChanged();
 
     const QString configDir = QFileInfo(Config::instance().filePath()).absolutePath();
     const QStringList candidates = {
@@ -3552,8 +3814,14 @@ void AppController::loadMcpServers()
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return;
-    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
     file.close();
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()
+        || !doc.object().value(QStringLiteral("mcpServers")).isObject()) {
+        emit toast(QStringLiteral("mcp.json inválido. Corrija o arquivo e recarregue os plugins."));
+        return;
+    }
 
     const QJsonObject servers = doc.object().value(QStringLiteral("mcpServers")).toObject();
     for (auto it = servers.constBegin(); it != servers.constEnd(); ++it) {
@@ -3563,12 +3831,18 @@ void AppController::loadMcpServers()
         m_mcpServers.append(server);
         startMcpServer(server);
     }
+    emit mcpServersChanged();
 }
 
 void AppController::startMcpServer(McpServer *server)
 {
+    if (server->config.value(QStringLiteral("disabled")).toBool()) {
+        server->status = QStringLiteral("Desativado");
+        return;
+    }
     const QString command = server->config.value(QStringLiteral("command")).toString();
     if (command.isEmpty()) {
+        server->status = QStringLiteral("Comando não configurado");
         emit toast(QStringLiteral("MCP %1: comando não configurado.").arg(server->name));
         return;
     }
@@ -3607,25 +3881,43 @@ void AppController::startMcpServer(McpServer *server)
 
         QJsonObject message;
         message.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
-        message.insert(QStringLiteral("id"), server->nextId++);
+        message.insert(QStringLiteral("id"), m_nextMcpId++);
         message.insert(QStringLiteral("method"), QStringLiteral("initialize"));
         message.insert(QStringLiteral("params"), params);
         mcpSend(server, message);
     });
     connect(process, &QProcess::errorOccurred, this,
             [this, server](QProcess::ProcessError processError) {
-                if (processError == QProcess::FailedToStart)
+                if (processError == QProcess::FailedToStart) {
+                    server->status = QStringLiteral("Falha ao iniciar");
+                    server->initialized = false;
+                    emit mcpServersChanged();
+                    failMcpCalls(server, QStringLiteral("Falha ao iniciar o plugin."));
                     emit toast(QStringLiteral("MCP %1: falha ao iniciar.").arg(server->name));
+                }
             });
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
             [this, server](int code, QProcess::ExitStatus) {
                 server->initialized = false;
+                server->status = QStringLiteral("Parado (código %1)").arg(code);
+                for (int i = m_mcpTools.size() - 1; i >= 0; --i)
+                    if (m_mcpTools.at(i).server == server->name)
+                        m_mcpTools.removeAt(i);
+                emit mcpServersChanged();
+                failMcpCalls(server, QStringLiteral("O plugin encerrou antes de responder."));
                 emit toast(QStringLiteral("MCP %1 terminou (código %2).")
                                .arg(server->name)
                                .arg(code));
             });
 
     process->start(command, args);
+    QTimer::singleShot(15000, process, [this, server, process] {
+        if (!m_mcpServers.contains(server) || server->process != process) return;
+        if (!server->initialized && server->process->state() == QProcess::Running) {
+            emit toast(QStringLiteral("MCP %1: sem resposta na inicialização.").arg(server->name));
+            server->process->kill();
+        }
+    });
 }
 
 void AppController::mcpSend(McpServer *server, const QJsonObject &message)
@@ -3645,7 +3937,13 @@ QString AppController::mcpPublicName(const QString &server, const QString &tool)
     QString safeTool = tool;
     safeTool.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_]")),
                      QStringLiteral("_"));
-    return QStringLiteral("mcp__%1__%2").arg(safeServer, safeTool);
+    const QString simple = QStringLiteral("mcp__%1__%2").arg(safeServer, safeTool);
+    if (safeServer == server && safeTool == tool && simple.size() <= 64
+        && !server.contains(QLatin1String("__")) && !tool.contains(QLatin1String("__")))
+        return simple;
+    const QString hash = QString::fromLatin1(QCryptographicHash::hash(
+        server.toUtf8() + '\0' + tool.toUtf8(), QCryptographicHash::Sha256).toHex().left(10));
+    return QStringLiteral("mcp__%1__%2_%3").arg(safeServer.left(16), safeTool.left(20), hash);
 }
 
 QString AppController::mcpJsonText(const QJsonObject &object)
@@ -3658,6 +3956,11 @@ void AppController::handleMcpOutput(McpServer *server)
     if (!server->process)
         return;
     server->buffer.append(server->process->readAllStandardOutput());
+    if (server->buffer.size() > 8 * 1024 * 1024) {
+        server->buffer.clear();
+        server->process->kill();
+        return;
+    }
 
     int index = -1;
     while ((index = server->buffer.indexOf('\n')) >= 0) {
@@ -3673,13 +3976,27 @@ void AppController::handleMcpOutput(McpServer *server)
         if (!object.contains(QStringLiteral("id")))
             continue;
 
+        if (object.contains(QStringLiteral("method"))) {
+            QJsonObject reply{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                              {QStringLiteral("id"), object.value(QStringLiteral("id"))}};
+            if (object.value(QStringLiteral("method")).toString() == QLatin1String("ping"))
+                reply.insert(QStringLiteral("result"), QJsonObject());
+            else
+                reply.insert(QStringLiteral("error"), QJsonObject{{QStringLiteral("code"), -32601},
+                    {QStringLiteral("message"), QStringLiteral("Method not supported")}});
+            mcpSend(server, reply);
+            continue;
+        }
+        if (!object.value(QStringLiteral("id")).isDouble())
+            continue;
         const int id = object.value(QStringLiteral("id")).toInt();
+        const auto key = qMakePair(server->name, id);
         if (object.contains(QStringLiteral("error"))) {
             const QString message = object.value(QStringLiteral("error")).toObject()
                                         .value(QStringLiteral("message")).toString();
-            if (m_mcpCallRuns.contains(id)) {
-                AgentRun *run = m_mcpCallRuns.take(id);
-                const QString toolName = m_mcpCallTools.take(id);
+            if (m_mcpCallRuns.contains(key)) {
+                AgentRun *run = m_mcpCallRuns.take(key);
+                const QString toolName = m_mcpCallTools.take(key);
                 finishToolCall(run,
                     QStringLiteral("{\"error\":%1}").arg(jsonQuote(
                         QStringLiteral("MCP: %1").arg(message))),
@@ -3690,9 +4007,9 @@ void AppController::handleMcpOutput(McpServer *server)
 
         const QJsonObject result = object.value(QStringLiteral("result")).toObject();
 
-        if (m_mcpCallRuns.contains(id)) {
-            AgentRun *run = m_mcpCallRuns.take(id);
-            const QString toolName = m_mcpCallTools.take(id);
+        if (m_mcpCallRuns.contains(key)) {
+            AgentRun *run = m_mcpCallRuns.take(key);
+            const QString toolName = m_mcpCallTools.take(key);
             QString text;
             for (const QJsonValue &value : result.value(QStringLiteral("content")).toArray()) {
                 const QJsonObject part = value.toObject();
@@ -3715,14 +4032,18 @@ void AppController::handleMcpOutput(McpServer *server)
             }
             if (text.trimmed().isEmpty())
                 text = mcpJsonText(result);
+            const bool failed = result.value(QStringLiteral("isError")).toBool();
             finishToolCall(run,
-                QStringLiteral("{\"result\":%1}").arg(jsonQuote(text.left(100000))),
-                QStringLiteral("⚙ %1: concluído (MCP)").arg(toolName));
+                (failed ? QStringLiteral("{\"error\":%1}") : QStringLiteral("{\"result\":%1}"))
+                    .arg(jsonQuote(text.left(100000))),
+                (failed ? QStringLiteral("⚙ %1: erro MCP") : QStringLiteral("⚙ %1: concluído (MCP)")).arg(toolName));
             continue;
         }
 
         if (result.contains(QStringLiteral("capabilities")) && !server->initialized) {
             server->initialized = true;
+            server->status = QStringLiteral("Conectado");
+            emit mcpServersChanged();
             const QJsonObject caps = result.value(QStringLiteral("capabilities")).toObject();
             server->capsResources = caps.contains(QStringLiteral("resources"));
             server->capsPrompts = caps.contains(QStringLiteral("prompts"));
@@ -3734,7 +4055,7 @@ void AppController::handleMcpOutput(McpServer *server)
 
             QJsonObject listMessage;
             listMessage.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
-            listMessage.insert(QStringLiteral("id"), server->nextId++);
+            listMessage.insert(QStringLiteral("id"), m_nextMcpId++);
             listMessage.insert(QStringLiteral("method"), QStringLiteral("tools/list"));
             listMessage.insert(QStringLiteral("params"), QJsonObject());
             mcpSend(server, listMessage);
@@ -3742,7 +4063,7 @@ void AppController::handleMcpOutput(McpServer *server)
             if (server->capsResources) {
                 QJsonObject resourcesMessage;
                 resourcesMessage.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
-                resourcesMessage.insert(QStringLiteral("id"), server->nextId++);
+                resourcesMessage.insert(QStringLiteral("id"), m_nextMcpId++);
                 resourcesMessage.insert(QStringLiteral("method"), QStringLiteral("resources/list"));
                 resourcesMessage.insert(QStringLiteral("params"), QJsonObject());
                 mcpSend(server, resourcesMessage);
@@ -3750,7 +4071,7 @@ void AppController::handleMcpOutput(McpServer *server)
             if (server->capsPrompts) {
                 QJsonObject promptsMessage;
                 promptsMessage.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
-                promptsMessage.insert(QStringLiteral("id"), server->nextId++);
+                promptsMessage.insert(QStringLiteral("id"), m_nextMcpId++);
                 promptsMessage.insert(QStringLiteral("method"), QStringLiteral("prompts/list"));
                 promptsMessage.insert(QStringLiteral("params"), QJsonObject());
                 mcpSend(server, promptsMessage);
@@ -3789,14 +4110,25 @@ void AppController::handleMcpOutput(McpServer *server)
             emit toast(QStringLiteral("MCP %1: %2 ferramenta(s) disponível(is).")
                            .arg(server->name)
                            .arg(count));
+            emit mcpServersChanged();
         }
     }
 }
 
 void AppController::mcpCallTool(AgentRun *run, const ToolCall &call)
 {
+    QString argumentError;
+    parseArguments(call, &argumentError);
+    if (!argumentError.isEmpty()) {
+        finishToolCall(run, QStringLiteral("{\"error\":%1}").arg(jsonQuote(argumentError)),
+                       QStringLiteral("⚙ %1: argumentos inválidos").arg(call.name));
+        return;
+    }
+    const bool nativeTool = std::any_of(m_mcpTools.cbegin(), m_mcpTools.cend(),
+        [&call](const McpTool &tool) { return mcpPublicName(tool.server, tool.name) == call.name; });
     for (McpServer *server : m_mcpServers) {
-        if (!server->process || server->process->state() != QProcess::Running)
+        if (nativeTool) break;
+        if (!server->initialized || !server->process || server->process->state() != QProcess::Running)
             continue;
 
         if (mcpPublicName(server->name, QStringLiteral("read_resource")) == call.name) {
@@ -3806,12 +4138,11 @@ void AppController::mcpCallTool(AgentRun *run, const ToolCall &call)
             params.insert(QStringLiteral("uri"), args.value(QStringLiteral("uri")).toString());
             QJsonObject message;
             message.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
-            const int id = server->nextId++;
+            const int id = m_nextMcpId++;
             message.insert(QStringLiteral("id"), id);
             message.insert(QStringLiteral("method"), QStringLiteral("resources/read"));
             message.insert(QStringLiteral("params"), params);
-            m_mcpCallRuns.insert(id, run);
-            m_mcpCallTools.insert(id, call.name);
+            trackMcpCall(server, id, run, call.name);
             if (displayingRun(run))
                 m_messages->updateLastTool(
                     QStringLiteral("⚙ %1: lendo recurso MCP…").arg(call.name), QString());
@@ -3833,12 +4164,11 @@ void AppController::mcpCallTool(AgentRun *run, const ToolCall &call)
             }
             QJsonObject message;
             message.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
-            const int id = server->nextId++;
+            const int id = m_nextMcpId++;
             message.insert(QStringLiteral("id"), id);
             message.insert(QStringLiteral("method"), QStringLiteral("prompts/get"));
             message.insert(QStringLiteral("params"), params);
-            m_mcpCallRuns.insert(id, run);
-            m_mcpCallTools.insert(id, call.name);
+            trackMcpCall(server, id, run, call.name);
             if (displayingRun(run))
                 m_messages->updateLastTool(
                     QStringLiteral("⚙ %1: obtendo prompt MCP…").arg(call.name), QString());
@@ -3890,21 +4220,85 @@ void AppController::mcpCallTool(AgentRun *run, const ToolCall &call)
 
     QJsonObject message;
     message.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
-    const int id = server->nextId++;
+    const int id = m_nextMcpId++;
     message.insert(QStringLiteral("id"), id);
     message.insert(QStringLiteral("method"), QStringLiteral("tools/call"));
     message.insert(QStringLiteral("params"), params);
 
-    m_mcpCallRuns.insert(id, run);
-    m_mcpCallTools.insert(id, call.name);
+    trackMcpCall(server, id, run, call.name);
     if (displayingRun(run))
         m_messages->updateLastTool(
             QStringLiteral("⚙ %1: executando via MCP…").arg(call.name), QString());
     mcpSend(server, message);
 }
 
+bool AppController::saveMcpServer(const QString &name, const QJsonObject &config, bool replace)
+{
+    if (!m_mcpCallRuns.isEmpty()) {
+        emit toast(QStringLiteral("Aguarde as chamadas dos plugins terminarem antes de alterar os servidores."));
+        return false;
+    }
+    const QString path = QFileInfo(Config::instance().filePath()).absolutePath() + QStringLiteral("/mcp.json");
+    QJsonObject document;
+    if (QFile::exists(path)) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) { emit toast(file.errorString()); return false; }
+        QJsonParseError error;
+        const auto parsed = QJsonDocument::fromJson(file.readAll(), &error);
+        if (error.error != QJsonParseError::NoError || !parsed.isObject()
+            || !parsed.object().value(QStringLiteral("mcpServers")).isObject()) {
+            emit toast(QStringLiteral("mcp.json inválido. Corrija o arquivo antes de adicionar plugins."));
+            return false;
+        }
+        document = parsed.object();
+    }
+    auto servers = document.value(QStringLiteral("mcpServers")).toObject();
+    if (!replace && servers.contains(name)) {
+        emit toast(QStringLiteral("Já existe um plugin com esse nome."));
+        return false;
+    }
+    servers.insert(name, config);
+    document.insert(QStringLiteral("mcpServers"), servers);
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) { emit toast(file.errorString()); return false; }
+    file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+    const auto bytes = QJsonDocument(document).toJson();
+    if (file.write(bytes) != bytes.size() || !file.commit()) { emit toast(file.errorString()); return false; }
+    reloadMcp();
+    return true;
+}
+
+bool AppController::addMcpServer(const QString &name, const QString &command, const QString &arguments)
+{
+    const QString cleanName = name.trimmed();
+    if (!QRegularExpression(QStringLiteral("^[A-Za-z0-9_]{1,64}$")).match(cleanName).hasMatch()
+        || command.trimmed().isEmpty()) {
+        emit toast(QStringLiteral("Use um nome com letras, números ou _ e informe o executável do plugin."));
+        return false;
+    }
+    return saveMcpServer(cleanName,
+        QJsonObject{{QStringLiteral("command"), command.trimmed()},
+                    {QStringLiteral("args"), QJsonArray::fromStringList(QProcess::splitCommand(arguments))}}, false);
+}
+
+void AppController::setMcpServerEnabled(const QString &name, bool enabled)
+{
+    for (const auto *server : m_mcpServers) {
+        if (server->name == name) {
+            auto config = server->config;
+            config.insert(QStringLiteral("disabled"), !enabled);
+            saveMcpServer(name, config, true);
+            return;
+        }
+    }
+}
+
 void AppController::reloadMcp()
 {
+    if (!m_mcpCallRuns.isEmpty()) {
+        emit toast(QStringLiteral("Aguarde as chamadas dos plugins terminarem antes de recarregar."));
+        return;
+    }
     loadMcpServers();
     emit toast(QStringLiteral("Servidores MCP recarregados (%1).").arg(m_mcpServers.size()));
 }
@@ -3916,11 +4310,8 @@ void AppController::openMcpFile()
     if (!QFileInfo::exists(path)) {
         QFile file(path);
         if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            file.write("{\n  \"mcpServers\": {\n"
-                       "    \"exemplo\": {\n"
-                       "      \"command\": \"npx\",\n"
-                       "      \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]\n"
-                       "    }\n  }\n}\n");
+            file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+            file.write("{\n  \"mcpServers\": {}\n}\n");
             file.close();
         }
     }
@@ -3990,9 +4381,6 @@ QString AppController::agentContextText() const
 bool AppController::toolNeedsApproval(const AgentRun *run, const ToolCall &call,
                                       bool *outsideWorkdir) const
 {
-    if (Config::instance().projectAllowsTool(run->projectId, call.name))
-        return false;
-
     if (call.name == QLatin1String("run_command")) {
         QString parseError;
         const QJsonObject args = parseArguments(call, &parseError);
@@ -4003,6 +4391,9 @@ bool AppController::toolNeedsApproval(const AgentRun *run, const ToolCall &call,
             return true;
         }
     }
+
+    if (Config::instance().projectAllowsTool(run->projectId, call.name))
+        return false;
 
     QString mode = run->permissionMode;
     if (mode != QLatin1String("ask") && mode != QLatin1String("auto")
@@ -4057,18 +4448,7 @@ QString AppController::resolvePathFor(const QString &workdir, const QString &pat
 
 bool AppController::insideDir(const QString &workdir, const QString &absolutePath)
 {
-    if (workdir.isEmpty() || absolutePath.isEmpty())
-        return false;
-
-    const QString base = QDir::cleanPath(QDir(workdir).absolutePath());
-    const QString clean = QDir::cleanPath(absolutePath);
-#ifdef Q_OS_WIN
-    const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
-#else
-    const Qt::CaseSensitivity cs = Qt::CaseSensitive;
-#endif
-    return clean.compare(base, cs) == 0
-        || clean.startsWith(base + QLatin1Char('/'), cs);
+    return PathPolicy::insideDir(workdir, absolutePath);
 }
 
 QJsonObject AppController::parseArguments(const ToolCall &call, QString *error)
@@ -4289,15 +4669,19 @@ bool AppController::runWriteFile(AgentRun *run, const ToolCall &call, QString *r
 
     backupFile(resolved);
 
-    QFile file(resolved);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    QSaveFile file(resolved);
+    if (!file.open(QIODevice::WriteOnly)) {
         *result = QStringLiteral("{\"error\":%1}").arg(jsonQuote(
             QStringLiteral("Não foi possível gravar: %1").arg(resolved)));
         *summary = QStringLiteral("⚙ write_file: falha ao gravar (%1)").arg(path);
         return false;
     }
-    file.write(data);
-    file.close();
+    if (file.write(data) != data.size() || !file.commit()) {
+        *result = QStringLiteral("{\"error\":%1}").arg(jsonQuote(
+            QStringLiteral("Não foi possível concluir a gravação: %1").arg(resolved)));
+        *summary = QStringLiteral("⚙ write_file: falha ao gravar (%1)").arg(path);
+        return false;
+    }
 
     m_api->logActivity(QStringLiteral("file_write"), resolved);
     if (displayingRun(run) && insideDir(run->workdir, resolved))
@@ -4947,6 +5331,10 @@ void AppController::runCommand(AgentRun *run, const ToolCall &call)
     auto *process = new QProcess(this);
     process->setWorkingDirectory(cwd);
     process->setProcessChannelMode(QProcess::MergedChannels);
+    auto capturedOutput = QSharedPointer<BoundedOutput>::create(kMaxToolOutput);
+    connect(process, &QProcess::readyRead, this, [process, capturedOutput] {
+        capturedOutput->append(process->readAll());
+    });
 #ifdef Q_OS_WIN
     // cmd.exe does not parse the CRT backslash escaping used by QProcess arguments.
     process->setNativeArguments(QStringLiteral("/D /S /C \"") + command + QLatin1Char('"'));
@@ -4961,14 +5349,15 @@ void AppController::runCommand(AgentRun *run, const ToolCall &call)
     });
 
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
-            [this, run, process, timer, timedOut](int exitCode, QProcess::ExitStatus) {
+            [this, run, process, timer, timedOut, capturedOutput](int exitCode, QProcess::ExitStatus) {
                 timer->stop();
                 if (run->process != process) {
                     process->deleteLater();
                     return;
                 }
                 run->process = nullptr;
-                const QByteArray raw = process->readAll();
+                capturedOutput->append(process->readAll());
+                const QByteArray raw = capturedOutput->data();
                 const bool wasTimeout = *timedOut;
                 process->deleteLater();
 
@@ -4996,6 +5385,7 @@ void AppController::runCommand(AgentRun *run, const ToolCall &call)
                 QJsonObject out;
                 out.insert(QStringLiteral("exit_code"), exitCode);
                 out.insert(QStringLiteral("output"), output);
+                out.insert(QStringLiteral("truncated"), capturedOutput->truncated());
                 if (wasTimeout)
                     out.insert(QStringLiteral("timed_out"), true);
                 finishToolCall(run,
@@ -5287,8 +5677,12 @@ QJsonArray AppController::toolDefinitions()
         tools.append(item);
     }
 
+    QSet<QString> nativeNames;
+    for (const auto &tool : m_mcpTools)
+        nativeNames.insert(mcpPublicName(tool.server, tool.name));
     for (const McpServer *server : m_mcpServers) {
-        if (server->hasResources) {
+        if (!server->initialized) continue;
+        if (server->hasResources && !nativeNames.contains(mcpPublicName(server->name, QStringLiteral("read_resource")))) {
             QJsonObject properties;
             properties.insert(QStringLiteral("uri"), stringProp(QStringLiteral(
                 "URI do recurso MCP a ler.")));
@@ -5297,7 +5691,7 @@ QJsonArray AppController::toolDefinitions()
                                       .arg(server->name),
                                   properties, QJsonArray{QStringLiteral("uri")}));
         }
-        if (server->hasPrompts) {
+        if (server->hasPrompts && !nativeNames.contains(mcpPublicName(server->name, QStringLiteral("get_prompt")))) {
             QJsonObject properties;
             properties.insert(QStringLiteral("name"), stringProp(QStringLiteral(
                 "Nome do prompt MCP.")));

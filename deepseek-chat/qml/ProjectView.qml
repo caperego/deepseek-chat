@@ -67,15 +67,15 @@ Item {
             }
         }
 
-        TabBar {
+        AppTabBar {
             id: tabs
             Layout.fillWidth: true
 
-            TabButton { text: "Memórias" }
-            TabButton { text: "Instruções" }
-            TabButton { text: "Arquivos" }
-            TabButton { text: "Comandos" }
-            TabButton { text: "Configurações" }
+            AppTabButton { text: "Memórias" }
+            AppTabButton { text: "Instruções" }
+            AppTabButton { text: "Arquivos" }
+            AppTabButton { text: "Comandos" }
+            AppTabButton { text: "Configurações" }
         }
 
         StackLayout {
@@ -486,13 +486,13 @@ Item {
                         rowSpacing: 12
 
                         Text { text: "Nome:"; color: theme.text }
-                        TextField {
+                        AppTextField {
                             id: nameField
                             Layout.fillWidth: true
                         }
 
                         Text { text: "Descrição:"; color: theme.text }
-                        TextField {
+                        AppTextField {
                             id: descriptionField
                             Layout.fillWidth: true
                         }
@@ -500,7 +500,7 @@ Item {
                         Text { text: "Pasta de trabalho:"; color: theme.text }
                         RowLayout {
                             Layout.fillWidth: true
-                            TextField {
+                            AppTextField {
                                 id: workdirField
                                 Layout.fillWidth: true
                             }
@@ -512,7 +512,7 @@ Item {
                         }
 
                         Text { text: "Modelo padrão:"; color: theme.text }
-                        ComboBox {
+                        HeaderComboBox {
                             id: projectModelCombo
                             Layout.fillWidth: true
                             model: app.models.map(function (m) { return m.id })
@@ -536,14 +536,14 @@ Item {
                         }
 
                         Text { text: "Esforço padrão:"; color: theme.text }
-                        ComboBox {
+                        HeaderComboBox {
                             id: projectEffortCombo
                             Layout.fillWidth: true
                             model: ["low", "high", "max"]
                         }
 
                         Text { text: "Permissões da IA:"; color: theme.text }
-                        ComboBox {
+                        HeaderComboBox {
                             id: projectPermissionCombo
                             Layout.fillWidth: true
                             model: ["Solicitar aprovação", "Aprovar por mim", "Acesso completo"]
@@ -611,7 +611,7 @@ Item {
         })
     }
 
-    Dialog {
+    AppDialog {
         id: commandEditor
         modal: true
     font.pointSize: theme.fontSize
@@ -633,7 +633,7 @@ Item {
             width: parent.width
             spacing: 10
 
-            TextField {
+            AppTextField {
                 id: commandName
                 Layout.fillWidth: true
                 placeholderText: "nome (sem /)"
@@ -659,7 +659,7 @@ Item {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: confirmDelete
     font.pointSize: theme.fontSize
         modal: true

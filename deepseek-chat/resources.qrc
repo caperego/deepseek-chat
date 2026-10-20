@@ -30,8 +30,20 @@
         <file>resources/icons/open.svg</file>
         <file>resources/icons/mic.svg</file>
         <file>resources/icons/chart.svg</file>
+        <file>resources/icons/plugin.svg</file>
+        <file>resources/icons/clock.svg</file>
+        <file>resources/icons/terminal.svg</file>
         <file>qml/main.qml</file>
         <file>qml/AppButton.qml</file>
+        <file>qml/AppTextField.qml</file>
+        <file>qml/AppCheckBox.qml</file>
+        <file>qml/AppSpinBox.qml</file>
+        <file>qml/AppDoubleSpinBox.qml</file>
+        <file>qml/AppTabButton.qml</file>
+        <file>qml/AppTabBar.qml</file>
+        <file>qml/AppDialog.qml</file>
+        <file>qml/HeaderComboBox.qml</file>
+        <file>qml/SidebarAction.qml</file>
         <file>qml/CopyableTextArea.qml</file>
         <file>qml/CopyableTextEdit.qml</file>
         <file>qml/LoginView.qml</file>
@@ -41,6 +53,7 @@
         <file>qml/MessageDelegate.qml</file>
         <file>qml/ProjectView.qml</file>
         <file>qml/SettingsDialog.qml</file>
+        <file>qml/AutomationsDialog.qml</file>
         <file>qml/ActivitiesDialog.qml</file>
     </qresource>
 </RCC>

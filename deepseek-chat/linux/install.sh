@@ -12,7 +12,11 @@ if [[ -n "$missing" ]]; then
     exit 1
 fi
 mkdir -p "$prefix" "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/256x256/apps"
-install -m755 deepseek-chat "$prefix/deepseek-chat"
+temporary="$(mktemp "$prefix/.deepseek-chat-update.XXXXXX")"
+trap 'if [[ -e "$temporary" ]]; then unlink "$temporary"; fi' EXIT
+install -m755 deepseek-chat "$temporary"
+mv -f "$temporary" "$prefix/deepseek-chat"
+trap - EXIT
 install -m644 LEIA-ME.txt "$prefix/LEIA-ME.txt"
 if [[ ! -e "$prefix/config.ini" ]]; then
     install -m600 config.ini.example "$prefix/config.ini"

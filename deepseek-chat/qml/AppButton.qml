@@ -7,7 +7,7 @@ Button {
     property bool primary: false
     property bool danger: false
     property bool ghost: false
-    property int cornerRadius: 9
+    property int cornerRadius: 12
 
     implicitHeight: Math.max(36, contentItem.implicitHeight + topPadding + bottomPadding)
     leftPadding: 12
@@ -42,8 +42,8 @@ Button {
                 return theme.dark ? "#3a3a3a" : "#e5e7eb"
             return control.hovered ? (theme.dark ? "#333333" : "#f3f4f6") : theme.card
         }
-        border.width: control.primary ? 0 : 1
-        border.color: theme.border
+        border.width: control.visualFocus ? 2 : ((control.primary || control.ghost) ? 0 : 1)
+        border.color: control.visualFocus ? theme.accent : theme.border
 
         Behavior on color {
             ColorAnimation { duration: 120 }

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Controls.impl
 
 Rectangle {
     id: sidebar
@@ -28,6 +29,7 @@ Rectangle {
     property var filteredModel: {
         var term = search.text.toLowerCase()
         var out = []
+        var entries = app.sidebar
         if (term.length >= 2) {
             var hits = app.searchResults
             if (hits.length > 0) {
@@ -41,8 +43,8 @@ Rectangle {
         }
         if (term.length === 0) {
             var project = 0
-            for (var row = 0; row < app.sidebar.length; ++row) {
-                var entry = app.sidebar[row]
+            for (var row = 0; row < entries.length; ++row) {
+                var entry = entries[row]
                 if (entry.type === "project") project = entry.id
                 if (entry.type === "header") project = 0
                 if (entry.type === "conv" && project && collapsedProjects[project]) continue
@@ -50,8 +52,8 @@ Rectangle {
             }
             return out
         }
-        for (var j = 0; j < app.sidebar.length; ++j) {
-            var item = app.sidebar[j]
+        for (var j = 0; j < entries.length; ++j) {
+            var item = entries[j]
             if (item.type !== "header" && item.title
                     && item.title.toLowerCase().indexOf(term) >= 0)
                 out.push(item)
@@ -62,7 +64,7 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 12
-        spacing: 10
+        spacing: 8
 
         RowLayout {
             spacing: 8
@@ -94,44 +96,81 @@ Rectangle {
             }
         }
 
-        Text {
-            text: "Conectado como " + (app.displayName.length > 0 ? app.displayName : app.userName)
-            color: theme.muted
-            font.pointSize: Math.max(9, theme.sidebarFontSize - 1)
-            font.family: theme.fontFamily
-            elide: Text.ElideRight
-            Layout.fillWidth: true
-        }
-
         AppButton {
             text: "Nova conversa"
             icon.source: "qrc:/resources/icons/plus.svg"
             Layout.fillWidth: true
             font.pointSize: theme.sidebarFontSize
-            primary: true
             onClicked: app.newConversation(app.activeProjectId)
         }
 
-        AppButton {
+        SidebarAction {
             text: "Novo projeto"
             icon.source: "qrc:/resources/icons/folder.svg"
             Layout.fillWidth: true
-            font.pointSize: theme.sidebarFontSize
             onClicked: newProjectDialog.open()
         }
 
-        TextField {
+        SidebarAction {
+            text: "Plugins MCP"
+            icon.source: "qrc:/resources/icons/plugin.svg"
+            Layout.fillWidth: true
+            onClicked: settingsDialog.openPlugins()
+        }
+
+        SidebarAction {
+            text: "Atividades"
+            icon.source: "qrc:/resources/icons/list.svg"
+            Layout.fillWidth: true
+            onClicked: {
+                app.refreshActivities()
+                activitiesDialog.open()
+            }
+        }
+
+        SidebarAction {
+            text: "Automações"
+            icon.source: "qrc:/resources/icons/clock.svg"
+            Layout.fillWidth: true
+            onClicked: automationsDialog.open()
+        }
+
+        SidebarAction {
+            text: "Terminal"
+            icon.source: "qrc:/resources/icons/terminal.svg"
+            Layout.fillWidth: true
+            onClicked: terminalDialog.open()
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.topMargin: 3
+            Layout.bottomMargin: 3
+            implicitHeight: 1
+            color: theme.border
+        }
+
+        AppTextField {
             id: search
             placeholderText: "Pesquisar..."
             Layout.fillWidth: true
             font.pointSize: theme.sidebarFontSize
             font.family: theme.fontFamily
-            leftPadding: 14
+            leftPadding: 36
             implicitHeight: Math.max(40, contentHeight + 18)
             background: Rectangle {
                 radius: 11
-                color: theme.card
+                color: "transparent"
                 border.color: search.activeFocus ? theme.accent : theme.border
+            }
+
+            IconImage {
+                x: 12
+                anchors.verticalCenter: parent.verticalCenter
+                width: 16
+                height: 16
+                source: "qrc:/resources/icons/search.svg"
+                color: theme.muted
             }
 
             onTextChanged: {
@@ -229,8 +268,8 @@ Rectangle {
                     anchors.top: modelData.type === "search" ? parent.top : undefined
                     anchors.topMargin: 5
                     anchors.left: parent.left
-                    anchors.leftMargin: (modelData.type === "project" ? 32 : 12)
-                        + (modelData.indent ? modelData.indent * 12 : 0)
+                    anchors.leftMargin: (modelData.type === "project" ? 52 : 12)
+                        + (modelData.indent ? modelData.indent * 52 : 0)
                     anchors.right: parent.right
                     anchors.rightMargin: itemRect.busy ? 30 : 8
                     text: modelData.type === "conv"
@@ -246,6 +285,16 @@ Rectangle {
                                     ? Math.max(10, theme.sidebarFontSize - 1) : theme.sidebarFontSize
                     font.family: theme.fontFamily
                     elide: Text.ElideRight
+                }
+
+                IconImage {
+                    visible: modelData.type === "project"
+                    x: 28
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 17
+                    height: 17
+                    source: "qrc:/resources/icons/folder.svg"
+                    color: theme.muted
                 }
 
                 Text {
@@ -312,45 +361,37 @@ Rectangle {
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 6
+            spacing: 2
 
-            AppButton {
-                text: "Atividades"
-                ghost: true
-                font.pointSize: theme.sidebarFontSize
-                icon.source: "qrc:/resources/icons/list.svg"
+            Rectangle {
                 Layout.fillWidth: true
-                onClicked: {
-                    app.refreshActivities()
-                    activitiesDialog.open()
-                }
+                Layout.bottomMargin: 4
+                implicitHeight: 1
+                color: theme.border
             }
 
-            AppButton {
-                text: "Terminal"
-                ghost: true
-                font.pointSize: theme.sidebarFontSize
-                icon.source: "qrc:/resources/icons/slash.svg"
-                Layout.fillWidth: true
-                onClicked: terminalDialog.open()
-            }
-
-            AppButton {
+            SidebarAction {
                 text: "Configurações"
-                ghost: true
-                font.pointSize: theme.sidebarFontSize
                 icon.source: "qrc:/resources/icons/gear.svg"
                 Layout.fillWidth: true
                 onClicked: settingsDialog.open()
             }
 
-            AppButton {
+            SidebarAction {
                 text: "Sair"
-                ghost: true
-                font.pointSize: theme.sidebarFontSize
                 icon.source: "qrc:/resources/icons/logout.svg"
                 Layout.fillWidth: true
                 onClicked: app.logout()
+            }
+
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 12
+                text: app.displayName.length > 0 ? app.displayName : app.userName
+                color: theme.muted
+                font.pointSize: Math.max(9, theme.sidebarFontSize - 1)
+                font.family: theme.fontFamily
+                elide: Text.ElideRight
             }
         }
     }
@@ -359,6 +400,12 @@ Rectangle {
         id: ctx
         property int targetId: 0
         property string targetTitle: ""
+    }
+
+    AutomationsDialog {
+        id: automationsDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
     }
 
     Menu {
@@ -416,7 +463,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: tagsDialog
         parent: Overlay.overlay
         title: "Etiquetas da conversa"
@@ -425,7 +472,7 @@ Rectangle {
         width: 380
         standardButtons: Dialog.Ok | Dialog.Cancel
 
-        TextField {
+        AppTextField {
             id: tagsField
             width: parent.width
             placeholderText: "Ex.: trabalho, urgente"
@@ -435,7 +482,7 @@ Rectangle {
         onAccepted: app.setConversationTags(ctx.targetId, tagsField.text)
     }
 
-    Dialog {
+    AppDialog {
         id: renameDialog
         parent: Overlay.overlay
         title: "Renomear conversa"
@@ -445,7 +492,7 @@ Rectangle {
         width: 380
         standardButtons: Dialog.Ok | Dialog.Cancel
 
-        TextField {
+        AppTextField {
             id: renameField
             width: parent.width
             text: ctx.targetTitle
@@ -455,7 +502,7 @@ Rectangle {
         onAccepted: app.renameConversation(ctx.targetId, renameField.text)
     }
 
-    Dialog {
+    AppDialog {
         id: deleteDialog
         parent: Overlay.overlay
     font.pointSize: theme.fontSize
@@ -475,7 +522,7 @@ Rectangle {
         onAccepted: app.deleteConversation(ctx.targetId)
     }
 
-    Dialog {
+    AppDialog {
         id: deleteProjectDialog
         parent: Overlay.overlay
     font.pointSize: theme.fontSize
@@ -496,7 +543,7 @@ Rectangle {
         onAccepted: app.deleteProject(ctx.targetId)
     }
 
-    Dialog {
+    AppDialog {
         id: newProjectDialog
         parent: Overlay.overlay
     font.pointSize: theme.fontSize
@@ -513,14 +560,14 @@ Rectangle {
             rowSpacing: 10
 
             Text { text: "Nome:"; color: theme.text }
-            TextField {
+            AppTextField {
                 id: projectName
                 Layout.fillWidth: true
                 placeholderText: "meu projeto"
             }
 
             Text { text: "Descrição:"; color: theme.text }
-            TextField {
+            AppTextField {
                 id: projectDescription
                 Layout.fillWidth: true
             }
@@ -528,7 +575,7 @@ Rectangle {
             Text { text: "Pasta:"; color: theme.text }
             RowLayout {
                 Layout.fillWidth: true
-                TextField {
+                AppTextField {
                     id: projectWorkdir
                     Layout.fillWidth: true
                     placeholderText: "/caminho/do/projeto"
@@ -541,14 +588,14 @@ Rectangle {
             }
 
             Text { text: "Modelo:"; color: theme.text }
-            ComboBox {
+            HeaderComboBox {
                 id: projectModel
                 Layout.fillWidth: true
                 model: app.models.map(function (m) { return m.id })
             }
 
             Text { text: "Esforço:"; color: theme.text }
-            ComboBox {
+            HeaderComboBox {
                 id: projectEffort
                 Layout.fillWidth: true
                 model: ["low", "high", "max"]
@@ -577,7 +624,7 @@ Rectangle {
         anchors.centerIn: parent
     }
 
-    Dialog {
+    AppDialog {
         id: terminalDialog
         parent: Overlay.overlay
         modal: true
@@ -611,7 +658,7 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: 8
 
-                TextField {
+                AppTextField {
                     id: terminalInput
                     Layout.fillWidth: true
                     placeholderText: "comando…"

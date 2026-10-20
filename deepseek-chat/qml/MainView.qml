@@ -153,13 +153,13 @@ RowLayout {
                 }
             }
 
-            TabBar {
+            AppTabBar {
                 id: artifactTabs
                 Layout.fillWidth: true
-                TabButton { text: "Editar" }
-                TabButton { text: "Prévia" }
-                TabButton { text: "Alterações" }
-                TabButton { text: "Versões" }
+                AppTabButton { text: "Editar" }
+                AppTabButton { text: "Prévia" }
+                AppTabButton { text: "Alterações" }
+                AppTabButton { text: "Versões" }
             }
 
             StackLayout {
@@ -256,7 +256,7 @@ RowLayout {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: approvalDialog
         modal: true
         anchors.centerIn: parent
@@ -304,12 +304,12 @@ RowLayout {
                 }
             }
 
-            CheckBox {
+            AppCheckBox {
                 id: alwaysCheck
                 text: "Não perguntar novamente nesta conversa"
             }
 
-            CheckBox {
+            AppCheckBox {
                 id: projectCheck
                 text: "Sempre permitir este tipo de ação neste projeto"
             }
@@ -348,7 +348,7 @@ RowLayout {
         onActivated: commandPalette.openAndFocus()
     }
 
-    Dialog {
+    AppDialog {
         id: commandPalette
         parent: Overlay.overlay
         anchors.centerIn: parent
@@ -402,7 +402,7 @@ RowLayout {
             anchors.fill: parent
             spacing: 10
 
-            TextField {
+            AppTextField {
                 id: commandSearch
                 Layout.fillWidth: true
                 placeholderText: "Digite um comando…"

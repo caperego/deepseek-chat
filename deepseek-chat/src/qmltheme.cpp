@@ -75,30 +75,30 @@ void QmlTheme::refresh()
         m_dark = false;
 
     if (m_dark) {
-        m_bg = QColor(QStringLiteral("#191a1e"));
-        m_sidebar = QColor(QStringLiteral("#121317"));
-        m_card = QColor(QStringLiteral("#22242a"));
-        m_border = QColor(QStringLiteral("#30323a"));
+        m_bg = QColor(QStringLiteral("#1b1c20"));
+        m_sidebar = QColor(QStringLiteral("#151619"));
+        m_card = QColor(QStringLiteral("#222327"));
+        m_border = QColor(QStringLiteral("#34353a"));
         m_text = QColor(QStringLiteral("#f2f3f5"));
         m_muted = QColor(QStringLiteral("#a6acba"));
-        m_accent = QColor(QStringLiteral("#7181ff"));
+        m_accent = QColor(QStringLiteral("#6d87f7"));
         m_userBubble = QColor(QStringLiteral("#292d3b"));
         m_systemBubble = QColor(QStringLiteral("#393426"));
         m_inputBg = QColor(QStringLiteral("#22242a"));
         m_selected = QColor(QStringLiteral("#2b2e37"));
         m_danger = QColor(QStringLiteral("#f87171"));
     } else {
-        m_bg = QColor(QStringLiteral("#fdfdfe"));
-        m_sidebar = QColor(QStringLiteral("#f7f8fb"));
+        m_bg = QColor(QStringLiteral("#ffffff"));
+        m_sidebar = QColor(QStringLiteral("#f7f7f8"));
         m_card = QColor(QStringLiteral("#ffffff"));
-        m_border = QColor(QStringLiteral("#e3e6ed"));
+        m_border = QColor(QStringLiteral("#e7e7e9"));
         m_text = QColor(QStringLiteral("#16181d"));
         m_muted = QColor(QStringLiteral("#687083"));
-        m_accent = QColor(QStringLiteral("#5667f2"));
-        m_userBubble = QColor(QStringLiteral("#eef1ff"));
+        m_accent = QColor(QStringLiteral("#4d6bfe"));
+        m_userBubble = QColor(QStringLiteral("#f2f3f5"));
         m_systemBubble = QColor(QStringLiteral("#fef3c7"));
-        m_inputBg = QColor(QStringLiteral("#fbfcff"));
-        m_selected = QColor(QStringLiteral("#e9edff"));
+        m_inputBg = QColor(QStringLiteral("#ffffff"));
+        m_selected = QColor(QStringLiteral("#eaeaec"));
         m_danger = QColor(QStringLiteral("#b91c1c"));
     }
 

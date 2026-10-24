@@ -22,11 +22,14 @@ Na versão 1.2.1, o painel de arquivos pode ser redimensionado arrastando a
 divisória e expandido para ocupar a janela. **Reduzir** restaura o painel lateral,
 preservando o texto em edição.
 
-Tarefas de desenvolvimento agora mantêm as ferramentas por até 128 rodadas,
-com revisão automática de pendências antes do encerramento. Respostas cortadas
-pelo limite de saída têm até três continuações automáticas. Falhas de conexão,
-aprovações pendentes e o limite total são informados; o histórico local de
-ferramentas é preservado para retomar sem perder os resultados anteriores.
+Na versão **1.2.2**, a revisão genérica introduzida na 1.2.1 foi removida.
+Tentativas de chamadas DSML recebidas como texto são identificadas e têm até
+dois pedidos de reenvio no protocolo correto; o aplicativo não executa comandos
+extraídos desse texto. O histórico antigo dessas tentativas é higienizado ao
+ser enviado ao modelo. Resultados reais de ferramentas permanecem no contexto
+local após concluir uma execução, inclusive ao pedir “continuar” na conversa
+aberta. O limite de 128 rodadas e as três continuações por limite de saída
+permanecem. Falhas de protocolo persistentes geram um erro explícito.
 
 ![Conversa no tema claro](docs/images/chat-claro.png)
 

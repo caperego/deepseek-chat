@@ -1,4 +1,5 @@
 #include "appcontroller.h"
+#include "toolprotocol.h"
 #include "boundedoutput.h"
 #include "apiclient.h"
 #include "assets.h"
@@ -75,7 +76,7 @@
 
 namespace {
 
-const char *kAppVersion = "1.2.1";
+const char *kAppVersion = "1.2.2";
 const int kMaxAgentRounds = 128;
 const int kMaxOutputContinuations = 3;
 const int kMaxListEntries = 500;
@@ -766,12 +767,19 @@ void MessageListModel::setMessages(const QVector<Message> &messages)
     beginResetModel();
     m_items.clear();
     for (const Message &message : messages) {
+        if (message.role == QLatin1String("assistant") && message.content.isEmpty()
+            && message.reasoning.isEmpty()) continue;
         Item item;
         item.id = message.id;
         item.role = message.role;
         item.content = message.content;
         item.reasoning = message.reasoning;
         item.sources = message.sources;
+        if (message.role == QLatin1String("tool")) {
+            item.detail = message.content;
+            item.content = message.toolSummary.isEmpty()
+                ? QStringLiteral("⚙ Resultado de ferramenta") : message.toolSummary;
+        }
         for (const Attachment &a : message.attachments)
             item.attachments.append(a.isImage() ? QStringLiteral("[imagem] ") + a.name
                                                 : a.name);
@@ -2152,7 +2160,11 @@ void AppController::startRun(const QString &title, bool persistUser)
         compact.content = QStringLiteral("Resumo do histórico anterior desta conversa:\n")
                           + summary;
         run->messages.append(compact);
-        history = history.mid(history.size() - 12);
+        // A tool result must not be separated from its assistant call.
+        int keepFrom = history.size() - 12;
+        while (keepFrom > 0 && history.at(keepFrom).role != QLatin1String("user"))
+            --keepFrom;
+        history = history.mid(keepFrom);
     }
     run->messages += history;
 
@@ -2308,6 +2320,28 @@ void AppController::connectRun(AgentRun *run)
                 onRunFinished(run, fullText, fullReasoning);
             });
     connect(run->stream, &StreamClient::failed, this, [this, run](const QString &error) {
+        if (!run->aborted && run->toolsEnabled && run->stream->protocolRepairable()
+            && run->protocolRepairs < 2) {
+            ++run->protocolRepairs;
+            run->awaitingProtocolRepair = true;
+            // No tool from this malformed response has run. Retry the request,
+            // without feeding the leaked markup back as assistant history.
+            if (displayingRun(run)) m_messages->removeLast();
+            Message guidance;
+            guidance.role = QStringLiteral("system");
+            guidance.content = QStringLiteral(
+                "A última resposta foi rejeitada porque enviou uma chamada como texto. "
+                "Nenhuma ação dessa resposta foi executada. Retome a solicitação usando "
+                "apenas chamadas estruturadas no campo tool_calls, com JSON válido e nomes "
+                "das ferramentas declaradas. Não emita marcação interna no conteúdo. "
+                "Inspecione os arquivos reais antes de afirmar que não existem. "
+                "As permissões e aprovações continuam obrigatórias.");
+            run->messages.prepend(guidance);
+            emit toast(QStringLiteral("Reenviando chamada de ferramenta inválida (%1/2)…")
+                           .arg(run->protocolRepairs));
+            sendRound(run);
+            return;
+        }
         if (!run->aborted && run->stream->outputLimited()
             && run->outputContinuations < kMaxOutputContinuations) {
             ++run->outputContinuations;
@@ -2376,8 +2410,7 @@ void AppController::onRunFinished(AgentRun *run, const QString &fullText,
     const QVector<ToolCall> calls = run->stream->toolCalls();
 
     if (!run->aborted && !calls.isEmpty()) {
-        run->usedTools = true;
-        run->reviewingCompletion = false;
+        run->awaitingProtocolRepair = false;
         Message assistant;
         assistant.role = QStringLiteral("assistant");
         assistant.content = fullText;
@@ -2396,21 +2429,10 @@ void AppController::onRunFinished(AgentRun *run, const QString &fullText,
         return;
     }
 
-    if (!run->aborted && run->toolsEnabled && run->usedTools
-        && !run->reviewingCompletion) {
-        // A text-only response can be a progress report rather than completion.
-        // Review once per candidate final response; another text response ends the run.
-        // If the review invokes tools, the next candidate gets its own review.
-        run->reviewingCompletion = true;
-        emit toast(QStringLiteral("Verificando pendências antes de encerrar…"));
-        continueRun(run, QStringLiteral(
-            "Antes de encerrar, revise a solicitação original e os resultados das ferramentas. "
-            "Se ainda houver trabalho autorizado pendente, continue executando agora com as "
-            "ferramentas, inclusive implementação e validação. Uma descrição ou promessa não "
-            "substitui a execução. Não peça ao usuário para dizer ‘continuar’. Se terminou, "
-            "responda com os resultados verificados e limitações reais, sem repetir verificações "
-            "desnecessárias. Se houver bloqueio que exija informação ou aprovação, explique-o "
-            "e encerre; não tente contornar permissões."));
+    if (!run->aborted && run->awaitingProtocolRepair) {
+        failRun(run, QStringLiteral(
+            "O provedor não reenviou uma chamada executável. A recuperação foi encerrada "
+            "sem executar o trecho inválido. Tente novamente ou selecione outro modelo."));
         return;
     }
 
@@ -2439,7 +2461,7 @@ void AppController::failRun(AgentRun *run, const QString &error)
             || m_history.last().content != text)) {
             Message partial;
             partial.role = QStringLiteral("assistant");
-            partial.content = text;
+            partial.content = ToolProtocol::safeAssistantContent(text);
             partial.reasoning = run->stream->fullReasoning();
             m_history.append(partial);
         }
@@ -2473,14 +2495,39 @@ void AppController::finishRun(AgentRun *run, const QString &fullText,
             m_messages->finishAssistant(fullText, fullReasoning);
     }
 
+    if (!aborted && displaying) {
+        m_history.clear();
+        for (const Message &message : run->messages)
+            if (message.role != QLatin1String("system")) m_history.append(message);
+        if (!fullText.isEmpty() || !fullReasoning.isEmpty()) {
+            Message final;
+            final.role = QStringLiteral("assistant");
+            final.content = fullText;
+            final.reasoning = fullReasoning;
+            m_history.append(final);
+        }
+    }
+
     destroyRun(run);
 
     if (!aborted && displaying && streamConversation > 0
         && m_currentConversationId == streamConversation) {
         QVector<Message> stored;
-        if (m_api->messages(m_currentConversationId, &stored)) {
-            m_history = stored;
-            m_messages->setMessages(stored);
+        if (m_api->messages(m_currentConversationId, &stored)
+            && m_currentConversationId == streamConversation) {
+            // The backend only stores prose, not tool calls/results. Use it to
+            // recover message IDs without throwing away the execution transcript.
+            int next = 0;
+            for (Message &local : m_history) {
+                for (int i = next; i < stored.size(); ++i) {
+                    if (stored.at(i).role == local.role && stored.at(i).content == local.content) {
+                        local.id = stored.at(i).id;
+                        next = i + 1;
+                        break;
+                    }
+                }
+            }
+            m_messages->setMessages(m_history);
         }
     }
 
@@ -2674,6 +2721,7 @@ void AppController::finishToolCall(AgentRun *run, const QString &result,
     Message tool;
     tool.role = QStringLiteral("tool");
     tool.toolCallId = run->currentTool.id;
+    tool.toolSummary = summary;
     tool.content = result;
     run->messages.append(tool);
 

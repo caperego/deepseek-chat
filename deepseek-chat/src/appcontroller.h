@@ -104,8 +104,8 @@ struct AgentRun {
     bool autoApprove = false;
     bool persistUser = true;
     bool generateTitle = false;
-    bool usedTools = false;
-    bool reviewingCompletion = false;
+    bool awaitingProtocolRepair = false;
+    int protocolRepairs = 0;
     int outputContinuations = 0;
     int round = 0;
     int toolIndex = 0;

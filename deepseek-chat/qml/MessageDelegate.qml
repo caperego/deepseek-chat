@@ -13,11 +13,37 @@ Item {
     property bool internalOpen: false
     readonly property bool isLast: index === ListView.view.count - 1
     readonly property int internalStart: !isUser && !isSystem && !isTool
-        ? displayContent.search(/<(?:｜|\|)+DSML(?:｜|\|)+[^>]*>/) : -1
+        ? leakedCallStart(displayContent) : -1
     readonly property string conversationText: internalStart >= 0
         ? displayContent.substring(0, internalStart).trim() : displayContent
     readonly property string internalText: internalStart >= 0
         ? displayContent.substring(internalStart) : ""
+
+    function leakedCallStart(text) {
+        var lines = text.split("\n")
+        var fenced = false
+        var fence = ""
+        var offset = 0
+        for (var i = 0; i < lines.length; ++i) {
+            var line = lines[i]
+            var trimmed = line.trim()
+            if (!fenced && (/^```/.test(trimmed) || /^~~~/.test(trimmed))) {
+                fenced = true
+                fence = trimmed.substring(0, 3)
+            } else if (fenced && trimmed.indexOf(fence) === 0) {
+                fenced = false
+            } else if (!fenced) {
+                var tags = /<(?:｜|\|)DSML(?:｜|\|)\s*(?:function_calls|tool_calls|calls|invoke)(?=\s|>)/g
+                var match
+                while ((match = tags.exec(line)) !== null) {
+                    if ((line.substring(0, match.index).split("`").length - 1) % 2 === 0)
+                        return offset + match.index
+                }
+            }
+            offset += line.length + 1
+        }
+        return -1
+    }
 
     function activityLabel() {
         var text = String(content || "")
@@ -526,7 +552,7 @@ Item {
                 Layout.fillWidth: true
                 Text {
                     Layout.fillWidth: true
-                    text: "Esta etapa não tem execução confirmada."
+                    text: "Chamada recebida fora do formato; este trecho não foi executado."
                     color: theme.muted
                     font.pointSize: Math.max(9, theme.chatFontSize - 2)
                     wrapMode: Text.Wrap

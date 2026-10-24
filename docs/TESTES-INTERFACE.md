@@ -184,3 +184,55 @@ teste de interação do painel de arquivos. Compilação e instalação local
 verificadas; o instalador preservou `config.ini` e `mcp.json`, e o executável
 instalado corresponde ao compilado por SHA-256. O ambiente de testes não
 dispõe do backend de voz opcional `speechd`; voz não foi validada nesta revisão.
+
+
+## Correção de chamadas como texto e perda de contexto — 1.2.2
+
+O aviso “Esta etapa não tem execução confirmada” era acionado na interface
+quando o conteúdo continha marcação DSML. O cliente não interpretava isso como
+falha de protocolo, então uma tentativa de usar ferramenta podia encerrar como
+resposta normal. A revisão genérica da 1.2.1 gerava mais uma chamada sem corrigir
+o formato. Essa revisão foi removida.
+
+A versão 1.2.2 detecta envelopes de chamada DSML fora de blocos de código,
+considera a resposta inválida e solicita até dois reenvios com ferramentas
+estruturadas. O texto inválido nunca é convertido em comando. Chamadas nativas
+válidas continuam passando pelas mesmas aprovações; se o provedor não reenviar
+uma chamada válida, a execução termina com erro explícito. Não há novas
+repetições automáticas em falhas de rede. Uma chamada válida que falhe ao
+executar também não é repetida por esse mecanismo.
+
+Mensagens antigas de assistant com essa marcação são higienizadas apenas no
+pedido enviado ao modelo, sem alterar registros no servidor. Exemplos em
+blocos de código permanecem literais. A interface usa o mesmo critério e
+explica que o trecho inválido não foi executado.
+
+Outra causa de perda de contexto foi confirmada: ao finalizar uma execução,
+o cliente substituía seu histórico completo pelo retorno do banco, que contém
+texto e não contém resultados de ferramentas. Agora os resultados locais e
+suas chamadas são mantidos enquanto a conversa permanece aberta; os IDs das
+mensagens são conciliados com o banco sem descartar o contexto. Não se promete
+persistência desses resultados ao fechar/reabrir a conversa ou o aplicativo.
+A seleção de histórico com resumo também evita cortar uma chamada de seu
+resultado ao escolher a cauda da conversa.
+
+A API oficial define as ações no campo `tool_calls`; marcação em `content`
+não é evidência de execução. Referência:
+https://api-docs.deepseek.com/guides/tool_calls/.
+Há relatos semelhantes no projeto de referência, sem comprovação de que a
+causa do provedor seja idêntica em todos os casos:
+https://github.com/deepseek-ai/deepseek-harness/discussions/10100.
+
+Novos testes usam um servidor HTTP local e arquivos reais temporários:
+reenvio de três variantes de DSML seguido de leitura de `site.html` por caminho
+relativo à pasta de trabalho; falha persistente limitada; promessa textual após
+reenvio inválido não tratada como sucesso; exemplos literais; higienização de
+histórico; preservação de resultados após retorno de banco sem ferramentas;
+encerramento normal sem revisão extra. Nenhuma conta ou chave real é usada.
+
+Resultado: **46 testes aprovados, zero falhas** no Linux, mais o teste de
+interação do painel. Compilação, pacote e instalação local verificados por
+SHA-256; `config.ini` e `mcp.json` foram preservados. O teste de reprodução
+usa respostas controladas de servidor local, não valida o comportamento do
+provedor real na conversa do usuário. Voz opcional (`speechd`) indisponível
+no ambiente de testes.

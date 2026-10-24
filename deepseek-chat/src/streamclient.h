@@ -32,6 +32,7 @@ public:
     QVector<ToolCall> toolCalls() const { return m_toolCalls; }
     QString fullText() const { return m_fullText; }
     QString fullReasoning() const { return m_fullReasoning; }
+    bool protocolRepairable() const { return m_protocolRepairable; }
     bool outputLimited() const { return m_outputLimited; }
 
 signals:
@@ -64,6 +65,7 @@ private:
     int m_promptTokens = 0;
     int m_completionTokens = 0;
     int m_cachedTokens = 0;
+    bool m_protocolRepairable = false;
     bool m_outputLimited = false;
     bool m_cancelled = false;
     bool m_done = false;

@@ -36,6 +36,7 @@ HEADERS += \
     src/chattypes.h \
     src/config.h \
     src/pathpolicy.h \
+    src/toolprotocol.h \
     src/boundedoutput.h \
     src/automationstore.h \
     src/theme.h \

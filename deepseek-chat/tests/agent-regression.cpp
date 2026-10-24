@@ -4,6 +4,7 @@
 #include "boundedoutput.h"
 #include "automationstore.h"
 #include "streamclient.h"
+#include "toolprotocol.h"
 #include <QApplication>
 #include <QJsonDocument>
 #include <QSignalSpy>
@@ -343,7 +344,7 @@ for line in sys.stdin:
         });
         controller.send("Teste de etapas");
         QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 8000);
-        QCOMPARE(api.requests.size(), 22);
+        QCOMPARE(api.requests.size(), 21);
         QVERIFY(api.requests.last().contains("tools"));
         QCOMPARE(api.requests.last().value("model").toString(), QString("deepseek-flash"));
         const auto messages = api.requests.last().value("messages").toArray();
@@ -360,28 +361,133 @@ for line in sys.stdin:
         const auto *model = controller.messageModel();
         QCOMPARE(model->data(model->index(model->rowCount() - 1, 0), MessageListModel::ContentRole).toString(), QString("Concluído com os resultados disponíveis."));
     }
-    void reviewResumesPendingWork() {
+    void successfulToolRunEndsWithoutExtraReview() {
         MockApi api; QTemporaryDir dir;
         api.response = [&api, &dir](const QJsonObject &) {
-            const int n = api.requests.size();
-            if (n == 1 || n == 3 || n == 5)
-                return tool("list_files", {{"path", dir.path()}}, n);
-            if (n < 6) return answer("Vou continuar a implementação.");
-            return answer("Implementação e verificação concluídas.");
+            return api.requests.size() == 1
+                ? tool("list_files", {{"path", dir.path()}}) : answer("Concluído.");
         };
         Config::instance().api().baseUrl = api.url();
         AppController controller; controller.setCurrentModel("deepseek-flash");
-        connect(&controller, &AppController::approvalRequested, &controller, [&controller] {
-            QTimer::singleShot(0, &controller, [&controller] { controller.resolveApproval(true, false); });
-        });
-        controller.send("Implemente o site completo");
-        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 8000);
-        QCOMPARE(api.requests.size(), 7);
-        QVERIFY(api.requests.at(2).value("messages").toArray().last().toObject()
-                    .value("content").toString().contains("Antes de encerrar"));
+        controller.m_activeProject.workdir = dir.path();
+        controller.send("Liste a pasta");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        QCOMPARE(api.requests.size(), 2);
+        int results = 0;
+        for (const Message &message : controller.m_history)
+            if (message.role == "tool") ++results;
+        QCOMPARE(results, 1);
+    }
+    void leakedToolTextIsReissuedAsNativeCall_data() {
+        QTest::addColumn<QString>("marker");
+        QTest::newRow("fullwidth") << QString("<｜DSML｜tool_calls>");
+        QTest::newRow("same-line") << QString("Vou procurar. <｜DSML｜tool_calls>");
+        QTest::newRow("ascii") << QString("<|DSML|function_calls>");
+        QTest::newRow("spaced-invoke") << QString("<｜DSML｜ invoke name=\"read_file\">");
+    }
+    void leakedToolTextIsReissuedAsNativeCall() {
+        QFETCH(QString, marker);
+        MockApi api; QTemporaryDir dir;
+        const QString path = dir.filePath("site.html");
+        QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("ARQUIVO_REAL_ENCONTRADO"); file.close();
+        api.response = [&api, marker](const QJsonObject &) {
+            if (api.requests.size() == 1) return answer(marker + "\ncomando inválido");
+            if (api.requests.size() == 2) return tool("read_file", {{"path", "site.html"}});
+            return answer("Arquivo encontrado e lido.");
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        controller.m_activeProject.workdir = dir.path();
+        controller.send("Encontre o arquivo do site");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        QCOMPARE(api.requests.size(), 3);
+        QVERIFY(!api.requests.at(1).value("persist_user").toBool(true));
+        for (const auto &message : api.requests.at(1).value("messages").toArray())
+            QVERIFY(!message.toObject().value("content").toString().contains(marker));
+        const auto result = api.requests.last().value("messages").toArray().last().toObject()
+                                .value("content").toString();
+        QVERIFY(result.contains("ARQUIVO_REAL_ENCONTRADO"));
         const auto *model = controller.messageModel();
-        QCOMPARE(model->data(model->index(model->rowCount()-1), MessageListModel::ContentRole).toString(),
-                 QString("Implementação e verificação concluídas."));
+        for (int row = 0; row < model->rowCount(); ++row)
+            QVERIFY(!model->data(model->index(row), MessageListModel::ContentRole).toString().contains(marker));
+    }
+    void repeatedProtocolFailureStopsWithoutExecutingText() {
+        MockApi api;
+        api.response = [](const QJsonObject &) { return answer("<｜DSML｜tool_calls>\n<invoke name=\"run_command\">fake</invoke>"); };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        QSignalSpy approval(&controller, &AppController::approvalRequested);
+        controller.send("Teste recuperação limitada");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        QCOMPARE(api.requests.size(), 3); QCOMPARE(approval.count(), 0);
+        const auto *model = controller.messageModel();
+        QVERIFY(model->data(model->index(model->rowCount()-1), MessageListModel::ErrorRole)
+                    .toString().contains("fora do protocolo"));
+    }
+    void plainTextAfterProtocolFailureIsNotSuccess() {
+        MockApi api;
+        api.response = [&api](const QJsonObject &) {
+            return api.requests.size() == 1 ? answer("<｜DSML｜tool_calls>")
+                                            : answer("Vou procurar o arquivo.");
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        controller.send("Encontre o site");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        QCOMPARE(api.requests.size(), 2);
+        const auto *model = controller.messageModel();
+        QVERIFY(model->data(model->index(model->rowCount()-1), MessageListModel::ErrorRole)
+                    .toString().contains("não reenviou"));
+    }
+    void dsmlCodeExamplesRemainLiteral() {
+        const QString example = "Exemplo:\n```xml\n<｜DSML｜tool_calls>\n```\nFim.";
+        QCOMPARE(ToolProtocol::leakedCallStart("Use `<｜DSML｜tool_calls>` como exemplo."), -1);
+        QCOMPARE(ToolProtocol::leakedCallStart(example), -1);
+        QCOMPARE(ToolProtocol::safeAssistantContent(example), example);
+        MockApi api; api.response = [example](const QJsonObject &) { return answer(example); };
+        StreamClient client; client.setBaseUrl(api.url());
+        QSignalSpy finished(&client, &StreamClient::finished), failed(&client, &StreamClient::failed);
+        Message prompt; prompt.role = "user"; prompt.content = "Explique a marcação";
+        client.send(0,0,"Teste","deepseek-flash","high",false,{prompt});
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 3000);
+        QCOMPARE(failed.size(), 0); QCOMPARE(client.fullText(), example);
+    }
+    void legacyLeakageIsExcludedFromOutgoingHistory() {
+        MockApi api; api.response = [](const QJsonObject &) { return answer("Pronto."); };
+        StreamClient client; client.setBaseUrl(api.url());
+        Message legacy; legacy.role = "assistant";
+        legacy.content = "Vou procurar.\n<｜DSML｜tool_calls>fake";
+        Message prompt; prompt.role = "user"; prompt.content = "Continue";
+        QSignalSpy finished(&client, &StreamClient::finished);
+        client.send(0,0,"Teste","deepseek-flash","high",false,{legacy,prompt});
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 3000);
+        const QString submitted = api.requests.first().value("messages").toArray().first()
+                                      .toObject().value("content").toString();
+        QVERIFY(!submitted.contains("DSML")); QVERIFY(submitted.contains("não foi executada"));
+    }
+    void completedRunKeepsToolResultsDespiteTextOnlyBackend() {
+        MockApi api; QTemporaryDir dir;
+        api.response = [&api, &dir](const QJsonObject &) {
+            return api.requests.size() == 1 ? tool("list_files", {{"path", dir.path()}})
+                                            : answer("Concluído.");
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        controller.m_currentConversationId = 99; // GET /messages returns an empty text-only history.
+        controller.m_activeProject.workdir = dir.path();
+        controller.send("Liste a pasta");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        int results = 0;
+        for (const Message &message : controller.m_history)
+            if (message.role == "tool") { ++results; QVERIFY(!message.toolSummary.isEmpty()); }
+        QCOMPARE(results, 1);
+        controller.send("Continue usando os resultados anteriores");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        int submitted = 0;
+        for (const auto &message : api.requests.last().value("messages").toArray())
+            if (message.toObject().value("role") == "tool") ++submitted;
+        QCOMPARE(submitted, 1);
     }
     void runawayLoopStopsAndKeepsToolContext() {
         MockApi api; QTemporaryDir dir;
@@ -513,7 +619,7 @@ for line in sys.stdin:
         QVERIFY(approval.last().at(1).toString().contains("PERIGOSO"));
         controller.resolveApproval(false, false);
         QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 5000);
-        QCOMPARE(api.requests.size(), 4);
+        QCOMPARE(api.requests.size(), 3);
     }
     void dangerousCommandRequiresApprovalInFullMode() {
         MockApi api;
@@ -543,7 +649,7 @@ for line in sys.stdin:
         QTRY_COMPARE_WITH_TIMEOUT(approval.count(), 2, 5000);
         controller.resolveApproval(false, false);
         QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 5000);
-        QCOMPARE(api.requests.size(), 4);
+        QCOMPARE(api.requests.size(), 3);
     }
     void writeFileCompletesBeforeReportingSuccess() {
         MockApi api; QTemporaryDir dir;
@@ -583,7 +689,7 @@ for line in sys.stdin:
         });
         controller.send("Teste local de aspas");
         QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 5000);
-        QCOMPARE(api.requests.size(), 3);
+        QCOMPARE(api.requests.size(), 2);
         const auto messages = api.requests.at(1).value("messages").toArray();
         const auto result = QJsonDocument::fromJson(messages.last().toObject().value("content").toString().toUtf8()).object();
         QCOMPARE(result.value("exit_code").toInt(-1), 0);

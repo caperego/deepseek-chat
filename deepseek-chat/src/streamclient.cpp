@@ -1,4 +1,5 @@
 #include "streamclient.h"
+#include "toolprotocol.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -60,7 +61,10 @@ void StreamClient::send(qint64 conversationId, qint64 projectId,
             object.insert(QStringLiteral("tool_call_id"), message.toolCallId);
             object.insert(QStringLiteral("content"), message.content);
         } else {
-            object.insert(QStringLiteral("content"), buildContent(message, allowImages));
+            Message outgoing = message;
+            if (outgoing.role == QLatin1String("assistant"))
+                outgoing.content = ToolProtocol::safeAssistantContent(outgoing.content);
+            object.insert(QStringLiteral("content"), buildContent(outgoing, allowImages));
         }
         // DeepSeek requires this context on subsequent requests with tools.
         if (message.role == QLatin1String("assistant") && hasToolContext)
@@ -142,6 +146,7 @@ void StreamClient::send(qint64 conversationId, qint64 projectId,
     m_streamError.clear();
     m_finishReason.clear();
     m_outputLimited = false;
+    m_protocolRepairable = false;
     m_done = false;
     m_cancelled = false;
 
@@ -374,6 +379,12 @@ void StreamClient::onReplyFinished()
     if (failure.isEmpty() && !m_done && m_finishReason.isEmpty())
         failure = QStringLiteral("A conexão terminou antes de concluir a resposta. "
                                  "O conteúdo recebido foi mantido; você pode pedir para continuar.");
+    if (failure.isEmpty() && ToolProtocol::leakedCallStart(m_fullText) >= 0) {
+        m_protocolRepairable = true;
+        failure = QStringLiteral("O provedor enviou uma chamada de ferramenta como texto "
+                                 "(DSML), fora do protocolo da API. Nenhuma ação desse "
+                                 "trecho foi executada.");
+    }
     if (failure.isEmpty() && m_finishReason == QLatin1String("length")) {
         // Only a clean, explicitly truncated text response is safe to continue.
         // Never execute or replay a partial tool call or a failed network request.

@@ -96,6 +96,7 @@ struct Message {
     QString reasoning;
     QString model;
     QString toolCallId;
+    QString toolSummary; // Local presentation only; never sent as tool arguments.
     QVector<ToolCall> toolCalls;
     QVector<Attachment> attachments;
     QVariantList sources;

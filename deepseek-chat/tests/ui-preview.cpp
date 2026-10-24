@@ -10,6 +10,9 @@
 #include <QTimer>
 #include <QDebug>
 #include <QLoggingCategory>
+#include <QQuickItem>
+#include <QTest>
+#include <cstdio>
 
 // Render the actual application resources using fictional data only.
 // Never load the developer's config, account, MCP processes, or remote API.
@@ -92,6 +95,61 @@ int main(int argc, char **argv) {
     auto *automations = window->findChild<QObject *>(QStringLiteral("automationsDialog"));
     auto *commandEditor = window->findChild<QObject *>(QStringLiteral("globalCommandEditor"));
     if (!settings || !automations) return 1;
+    if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QLatin1String("--artifact")) {
+        QFile file(temporary.path() + QStringLiteral("/demonstracao.md"));
+        if (!file.open(QIODevice::WriteOnly)) return 1;
+        file.write("# Arquivo de demonstração\n\nConteúdo para testar o painel redimensionável.\n");
+        file.close();
+        const QString path = file.fileName();
+        QTimer::singleShot(250, [&, path] {
+            auto check = [](bool condition, const char *message) {
+                if (!condition) { std::fprintf(stderr, "%s\n", message); QCoreApplication::exit(1); }
+                return condition;
+            };
+            app.openArtifact(path);
+            QTest::qWait(100);
+            auto *main = window->findChild<QQuickItem *>(QStringLiteral("mainView"));
+            auto *panel = window->findChild<QQuickItem *>(QStringLiteral("artifactPanel"));
+            auto *handle = window->findChild<QQuickItem *>(QStringLiteral("artifactResizeHandle"));
+            auto *button = window->findChild<QQuickItem *>(QStringLiteral("expandArtifactButton"));
+            auto *editor = window->findChild<QQuickItem *>(QStringLiteral("artifactEditor"));
+            auto *conversation = window->findChild<QQuickItem *>(QStringLiteral("conversationPane"));
+            if (!check(main && panel && handle && button && editor && conversation, "Painel não encontrado")) return;
+            const QString draft = editor->property("text").toString() + QStringLiteral("\nEdição não salva.");
+            editor->setProperty("text", draft);
+            const qreal initial = panel->width();
+            const QPoint start = handle->mapToScene(QPointF(handle->width() / 2, handle->height() / 2)).toPoint();
+            QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+            QTest::mouseMove(window, start - QPoint(100, 0), 50);
+            QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, start - QPoint(100, 0));
+            QTest::qWait(100);
+            if (!check(panel->width() > initial + 60, "A divisória não ampliou o painel")) return;
+            save(QStringLiteral("arquivo-redimensionado"));
+            auto clickExpand = [&] {
+                QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                    button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).toPoint());
+                QTest::qWait(100);
+            };
+            clickExpand();
+            if (!check(panel->width() >= window->width() - 4 && !conversation->isVisible(), "O painel não expandiu na janela")) return;
+            if (!check(editor->property("text").toString() == draft, "A expansão perdeu o texto em edição")) return;
+            save(QStringLiteral("arquivo-expandido"));
+            clickExpand();
+            if (!check(conversation->isVisible() && panel->width() > initial + 60, "A redução não restaurou o layout")) return;
+            window->resize(920, 600);
+            QTest::qWait(150);
+            if (!check(panel->width() <= main->property("artifactMaximumWidth").toReal() + 2, "Painel ultrapassou a largura disponível")) return;
+            if (!check(editor->property("text").toString() == draft, "O redimensionamento perdeu o texto em edição")) return;
+            save(QStringLiteral("arquivo-janela-pequena"));
+            clickExpand();
+            app.closeArtifact();
+            QTest::qWait(100);
+            if (!check(conversation->isVisible() && !main->property("artifactExpanded").toBool(), "Fechar não restaurou a conversa")) return;
+            std::fprintf(stdout, "Painel: arrastar, expandir, reduzir, preservar edição e fechar verificados.\n");
+            QCoreApplication::quit();
+        });
+        return application.exec();
+    }
     if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QLatin1String("--qa")) {
         int step = 0;
         for (bool dark : {false, true}) {

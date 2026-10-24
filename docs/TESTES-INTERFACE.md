@@ -130,3 +130,57 @@ Modelos e provedores foram preservados.
   apresentação separada. Em seguida, a sessão foi recuperada, projetos e conversas
   carregaram, o aviso sumiu e os controles ficaram disponíveis.
 - qmllint não apontou erros; git diff --check passou.
+
+## Painel de arquivos — 1.2.1
+
+A divisória entre o chat e o arquivo aceita arrastar; um clique duplo expande
+para a janela. O botão Expandir/Reduzir alterna entre o painel lateral e a
+visualização ampliada. A edição permanece no mesmo componente, preservando
+alterações não salvas. Fechar o arquivo restaura a navegação e a conversa.
+
+Teste com dados fictícios, sem conta ou API externa:
+
+```bash
+bash deepseek-chat/build.sh
+qmake6 -o deepseek-chat/build/ui-preview/Makefile deepseek-chat/tests/ui-preview.pro
+make -C deepseek-chat/build/ui-preview -j4
+QT_QPA_PLATFORM=offscreen deepseek-chat/build/ui-preview/ui-preview /tmp/deepseek-panel-qa --artifact
+```
+
+O teste arrasta a divisória com eventos de mouse, clica em Expandir e Reduzir,
+verifica a preservação de uma edição não salva, redimensiona para 920 × 600 e
+confere o retorno à conversa ao fechar o arquivo expandido. As capturas são
+salvas na pasta informada, com conteúdo fictício.
+
+
+## Continuidade de tarefas — 1.2.1
+
+A conclusão forçada após 12 rodadas foi removida. O cliente mantém ferramentas
+por até 128 rodadas por execução; ao atingir esse limite, mostra uma pausa
+explícita e preserva o contexto local de chamadas e resultados para o próximo
+pedido. Esse limite evita ciclos indefinidos e não comprova conclusão.
+
+Depois de utilizar ferramentas, cada resposta candidata a final passa por uma
+revisão automática de pendências. A revisão pode voltar a executar ferramentas;
+se responder apenas com texto novamente, o aplicativo encerra. A revisão é uma
+instrução ao modelo, não uma garantia de que o trabalho esteja correto ou completo.
+Ela preserva o modo de permissões e acrescenta uma chamada ao modelo em cada
+encerramento candidato; essa chamada pode consumir tokens adicionais.
+
+Cortes explícitos por `finish_reason=length`, com texto e sem chamadas de
+ferramentas, permitem até três continuações automáticas. Falhas de rede, erros
+HTTP/SSE e ferramentas incompletas não são repetidos automaticamente. O botão
+Parar e as aprovações continuam ativos. Após falha, o transcript local completo
+é mantido na conversa atual; não se promete recuperação desse contexto após
+fechar o aplicativo, pois o servidor não persiste os resultados das ferramentas.
+
+Regressões com servidor local: mais de 12 rodadas mantendo ferramentas e
+raciocínio; duas retomadas de trabalho após respostas intermediárias; parada
+após 128 rodadas e envio do contexto em ‘continuar’; corte de resposta com
+limite de três retomadas; queda de conexão sem repetição de ferramentas.
+
+Resultado desta versão: **37 testes aprovados, zero falhas** no Linux, além do
+teste de interação do painel de arquivos. Compilação e instalação local
+verificadas; o instalador preservou `config.ini` e `mcp.json`, e o executável
+instalado corresponde ao compilado por SHA-256. O ambiente de testes não
+dispõe do backend de voz opcional `speechd`; voz não foi validada nesta revisão.

@@ -75,8 +75,9 @@
 
 namespace {
 
-const char *kAppVersion = "1.2.0";
-const int kMaxAgentRounds = 12;
+const char *kAppVersion = "1.2.1";
+const int kMaxAgentRounds = 128;
+const int kMaxOutputContinuations = 3;
 const int kMaxListEntries = 500;
 const int kMaxReadBytes = 512 * 1024;
 const int kMaxWriteBytes = 2 * 1024 * 1024;
@@ -2307,6 +2308,17 @@ void AppController::connectRun(AgentRun *run)
                 onRunFinished(run, fullText, fullReasoning);
             });
     connect(run->stream, &StreamClient::failed, this, [this, run](const QString &error) {
+        if (!run->aborted && run->stream->outputLimited()
+            && run->outputContinuations < kMaxOutputContinuations) {
+            ++run->outputContinuations;
+            emit toast(QStringLiteral("Limite de resposta: continuando automaticamente (%1/%2).")
+                           .arg(run->outputContinuations).arg(kMaxOutputContinuations));
+            continueRun(run, QStringLiteral(
+                "A resposta anterior foi cortada pelo limite de saída. Continue do ponto "
+                "em que parou, sem repetir o conteúdo recebido. Se ainda há ações pendentes "
+                "da solicitação, use as ferramentas e conclua o trabalho autorizado."));
+            return;
+        }
         failRun(run, error);
     });
 
@@ -2324,32 +2336,38 @@ void AppController::sendRound(AgentRun *run)
         return;
     }
 
+    if (run->round >= kMaxAgentRounds) {
+        // Do not force a success summary or discard completed tool results.
+        failRun(run, QStringLiteral(
+            "Execução pausada após %1 rodadas para evitar um ciclo sem fim. "
+            "O contexto e os resultados locais foram preservados. Envie ‘continuar’ "
+            "para retomar; a tarefa pode ainda estar incompleta.").arg(kMaxAgentRounds));
+        return;
+    }
     ++run->round;
     if (run->round > 1 && displayingRun(run))
         m_messages->beginAssistant();
 
-    QVector<Message> messages = run->messages;
-    const bool finalRound = run->round > kMaxAgentRounds;
-    if (finalRound) {
-        const QString conclusion = QStringLiteral(
-            "\n\nO limite de etapas desta execução foi atingido. Agora conclua com uma "
-            "resposta final em português, usando apenas os resultados já recebidos. "
-            "Informe o que foi concluído, eventuais erros, o que falta e os caminhos "
-            "dos arquivos gerados. Não prometa executar outra ação nem chame ferramentas. "
-            "Não declare sucesso sem evidência nos resultados.");
-        if (!messages.isEmpty() && messages.first().role == QLatin1String("system"))
-            messages.first().content += conclusion;
-        else {
-            Message system;
-            system.role = QStringLiteral("system");
-            system.content = conclusion;
-            messages.prepend(system);
-        }
-    }
     run->stream->send(run->conversationId, run->projectId, run->title,
-                      run->model, run->effort, run->allowImages, messages,
-                      run->toolsEnabled && !finalRound ? toolDefinitions() : QJsonArray(),
+                      run->model, run->effort, run->allowImages, run->messages,
+                      run->toolsEnabled ? toolDefinitions() : QJsonArray(),
                       run->persistUser && run->round == 1, true, run->sources);
+}
+
+void AppController::continueRun(AgentRun *run, const QString &instruction)
+{
+    Message assistant;
+    assistant.role = QStringLiteral("assistant");
+    assistant.content = run->stream->fullText();
+    assistant.reasoning = run->stream->fullReasoning();
+    run->messages.append(assistant);
+    if (displayingRun(run))
+        m_messages->finishAssistant(assistant.content, assistant.reasoning);
+    Message guidance;
+    guidance.role = QStringLiteral("system");
+    guidance.content = instruction;
+    run->messages.append(guidance);
+    sendRound(run);
 }
 
 void AppController::onRunFinished(AgentRun *run, const QString &fullText,
@@ -2357,7 +2375,9 @@ void AppController::onRunFinished(AgentRun *run, const QString &fullText,
 {
     const QVector<ToolCall> calls = run->stream->toolCalls();
 
-    if (!run->aborted && !calls.isEmpty() && run->round <= kMaxAgentRounds) {
+    if (!run->aborted && !calls.isEmpty()) {
+        run->usedTools = true;
+        run->reviewingCompletion = false;
         Message assistant;
         assistant.role = QStringLiteral("assistant");
         assistant.content = fullText;
@@ -2376,9 +2396,21 @@ void AppController::onRunFinished(AgentRun *run, const QString &fullText,
         return;
     }
 
-    if (!run->aborted && !calls.isEmpty()) {
-        failRun(run, QStringLiteral("O limite de etapas foi atingido. As ações pendentes "
-                                    "não foram executadas; peça para continuar."));
+    if (!run->aborted && run->toolsEnabled && run->usedTools
+        && !run->reviewingCompletion) {
+        // A text-only response can be a progress report rather than completion.
+        // Review once per candidate final response; another text response ends the run.
+        // If the review invokes tools, the next candidate gets its own review.
+        run->reviewingCompletion = true;
+        emit toast(QStringLiteral("Verificando pendências antes de encerrar…"));
+        continueRun(run, QStringLiteral(
+            "Antes de encerrar, revise a solicitação original e os resultados das ferramentas. "
+            "Se ainda houver trabalho autorizado pendente, continue executando agora com as "
+            "ferramentas, inclusive implementação e validação. Uma descrição ou promessa não "
+            "substitui a execução. Não peça ao usuário para dizer ‘continuar’. Se terminou, "
+            "responda com os resultados verificados e limitações reais, sem repetir verificações "
+            "desnecessárias. Se houver bloqueio que exija informação ou aprovação, explique-o "
+            "e encerre; não tente contornar permissões."));
         return;
     }
 
@@ -2396,9 +2428,15 @@ void AppController::failRun(AgentRun *run, const QString &error)
         if (m_messages->lastRole() != QLatin1String("assistant"))
             m_messages->beginAssistant();
         m_messages->failAssistant(error);
-        // Preserve partial output in the context for an explicit continuation.
+        // Keep the full local tool transcript so an explicit continuation knows
+        // which actions already happened. Exclude system guidance from future runs.
+        m_history.clear();
+        for (const Message &message : run->messages)
+            if (message.role != QLatin1String("system")) m_history.append(message);
         const QString text = run->stream->fullText();
-        if (!text.isEmpty()) {
+        if (run->stream->toolCalls().isEmpty() && !text.isEmpty() && (m_history.isEmpty()
+            || m_history.last().role != QLatin1String("assistant")
+            || m_history.last().content != text)) {
             Message partial;
             partial.role = QStringLiteral("assistant");
             partial.content = text;
@@ -4366,7 +4404,9 @@ QString AppController::agentContextText() const
                             : QDir::toNativeSeparators(m_activeProject.workdir));
     context += QStringLiteral("\nModo de permissão atual: %1.").arg(modeText);
     context += QStringLiteral(
-        "\nConclua a tarefa com uma resposta final que descreva o resultado e o que "
+        "\nProssiga com as ferramentas até concluir o trabalho solicitado. Não encerre com "
+        "promessas de executar a próxima etapa nem peça ‘continuar’ se já tem autorização. "
+        "Conclua a tarefa com uma resposta final que descreva o resultado e o que "
         "não conseguiu concluir. Evite repetir verificações sem novas evidências.");
 #ifdef Q_OS_WIN
     context += QStringLiteral(

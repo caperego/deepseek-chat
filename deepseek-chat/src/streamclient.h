@@ -32,6 +32,7 @@ public:
     QVector<ToolCall> toolCalls() const { return m_toolCalls; }
     QString fullText() const { return m_fullText; }
     QString fullReasoning() const { return m_fullReasoning; }
+    bool outputLimited() const { return m_outputLimited; }
 
 signals:
     void metaReceived(qint64 conversationId);
@@ -63,6 +64,7 @@ private:
     int m_promptTokens = 0;
     int m_completionTokens = 0;
     int m_cachedTokens = 0;
+    bool m_outputLimited = false;
     bool m_cancelled = false;
     bool m_done = false;
     int m_timeout = 600000;

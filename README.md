@@ -18,6 +18,16 @@ plugins disponíveis são servidores MCP stdio, e não bundles Cordis do Harness
 
 As imagens abaixo são capturas do aplicativo com dados fictícios, sem conta real.
 
+Na versão 1.2.1, o painel de arquivos pode ser redimensionado arrastando a
+divisória e expandido para ocupar a janela. **Reduzir** restaura o painel lateral,
+preservando o texto em edição.
+
+Tarefas de desenvolvimento agora mantêm as ferramentas por até 128 rodadas,
+com revisão automática de pendências antes do encerramento. Respostas cortadas
+pelo limite de saída têm até três continuações automáticas. Falhas de conexão,
+aprovações pendentes e o limite total são informados; o histórico local de
+ferramentas é preservado para retomar sem perder os resultados anteriores.
+
 ![Conversa no tema claro](docs/images/chat-claro.png)
 
 | Configurações | Automações |

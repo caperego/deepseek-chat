@@ -277,7 +277,7 @@ bash linux/package.sh
 ```
 
 Os arquivos `.run`, `.tar.gz` e os hashes SHA-256 ficam em `dist/`.
-Execute `bash dist/deepseek-chat-1.2.0-linux-x86_64.run` para instalar
+Execute `bash dist/deepseek-chat-1.2.1-linux-x86_64.run` para instalar
 em `~/.local/share/deepseek-chat`, com atalho no menu e em `~/.local/bin`.
 O instalador preserva as configurações nas atualizações e não inclui credenciais
 da máquina de compilação. Configure a URL do backend no aplicativo após instalar.

@@ -104,6 +104,9 @@ struct AgentRun {
     bool autoApprove = false;
     bool persistUser = true;
     bool generateTitle = false;
+    bool usedTools = false;
+    bool reviewingCompletion = false;
+    int outputContinuations = 0;
     int round = 0;
     int toolIndex = 0;
     QVector<Message> messages;
@@ -459,6 +462,7 @@ private:
     void runAutomation(const QVariantMap &task);
     void stopRun(AgentRun *run);
     void sendRound(AgentRun *run);
+    void continueRun(AgentRun *run, const QString &instruction);
     void onRunFinished(AgentRun *run, const QString &fullText,
                        const QString &fullReasoning);
     void finishRun(AgentRun *run, const QString &fullText, const QString &fullReasoning);

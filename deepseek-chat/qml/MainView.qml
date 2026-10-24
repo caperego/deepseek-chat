@@ -4,9 +4,18 @@ import QtQuick.Layouts
 
 RowLayout {
     id: main
+    objectName: "mainView"
     spacing: 0
     property int navigationWidth: app.sidebarWidth
     property bool navigationCollapsed: app.sidebarCollapsed
+    property real artifactWidth: 460
+    property bool artifactExpanded: false
+    readonly property real artifactMaximumWidth: Math.max(280,
+        main.width - (navigation.visible ? navigation.width + 6 : 52) - 288)
+
+    function toggleArtifactExpanded() {
+        artifactExpanded = !artifactExpanded
+    }
 
     function toggleNavigation() {
         navigationCollapsed = !navigationCollapsed
@@ -14,7 +23,7 @@ RowLayout {
     }
 
     Rectangle {
-        visible: main.navigationCollapsed
+        visible: main.navigationCollapsed && !main.artifactExpanded
         Layout.preferredWidth: 52
         Layout.fillHeight: true
         color: theme.sidebar
@@ -51,14 +60,14 @@ RowLayout {
 
     Sidebar {
         id: navigation
-        visible: !main.navigationCollapsed
+        visible: !main.navigationCollapsed && !main.artifactExpanded
         Layout.preferredWidth: Math.min(main.navigationWidth, Math.max(220, main.width * 0.38))
         Layout.fillHeight: true
         onCollapseRequested: main.toggleNavigation()
     }
 
     Rectangle {
-        visible: !main.navigationCollapsed
+        visible: !main.navigationCollapsed && !main.artifactExpanded
         Layout.preferredWidth: 6
         Layout.fillHeight: true
         color: resizeMouse.containsMouse || resizeMouse.pressed ? theme.selected : theme.bg
@@ -87,6 +96,8 @@ RowLayout {
     }
 
     StackLayout {
+        objectName: "conversationPane"
+        visible: !main.artifactExpanded
         Layout.fillWidth: true
         Layout.fillHeight: true
         currentIndex: app.viewMode
@@ -96,7 +107,46 @@ RowLayout {
     }
 
     Rectangle {
-        Layout.preferredWidth: app.artifactVisible ? Math.min(460, main.width * 0.4) : 0
+        objectName: "artifactResizeHandle"
+        visible: app.artifactVisible && !main.artifactExpanded
+        Layout.preferredWidth: 8
+        Layout.fillHeight: true
+        color: artifactResizeMouse.containsMouse || artifactResizeMouse.pressed ? theme.selected : theme.bg
+        Rectangle {
+            anchors.centerIn: parent
+            width: 2
+            height: 40
+            radius: 1
+            color: artifactResizeMouse.containsMouse || artifactResizeMouse.pressed ? theme.accent : theme.border
+        }
+        MouseArea {
+            id: artifactResizeMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.SizeHorCursor
+            property real startX: 0
+            property real startWidth: 0
+            onPressed: function(event) {
+                startX = mapToItem(main, event.x, event.y).x
+                startWidth = artifactPanel.width
+            }
+            onPositionChanged: function(event) {
+                if (pressed)
+                    main.artifactWidth = Math.max(280, Math.min(main.artifactMaximumWidth,
+                        startWidth + startX - mapToItem(main, event.x, event.y).x))
+            }
+            onDoubleClicked: main.toggleArtifactExpanded()
+            ToolTip.visible: containsMouse && !pressed
+            ToolTip.text: "Arraste para redimensionar · Clique duplo para expandir"
+        }
+    }
+
+    Rectangle {
+        id: artifactPanel
+        objectName: "artifactPanel"
+        Layout.preferredWidth: main.artifactExpanded ? main.width
+            : Math.min(main.artifactWidth, main.artifactMaximumWidth)
+        Layout.fillWidth: main.artifactExpanded
         Layout.fillHeight: true
         visible: app.artifactVisible
         color: theme.bg
@@ -126,31 +176,55 @@ RowLayout {
                 }
 
                 AppButton {
-                    text: "Copiar"
+                    objectName: "expandArtifactButton"
+                    text: main.artifactExpanded ? "Reduzir" : "Expandir"
+                    ghost: true
+                    ToolTip.visible: hovered
+                    ToolTip.text: main.artifactExpanded ? "Voltar ao painel lateral" : "Usar toda a janela para ver o arquivo"
+                    onClicked: main.toggleArtifactExpanded()
+                }
+
+                AppButton {
+                    icon.source: "qrc:/resources/icons/close.svg"
+                    ghost: true
+                    ToolTip.text: "Fechar arquivo"
+                    ToolTip.visible: hovered
+                    onClicked: app.closeArtifact()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                AppButton {
+                    text: artifactPanel.width < 420 ? "" : "Copiar"
+                    ToolTip.text: "Copiar arquivo"
+                    ToolTip.visible: hovered
+                    icon.source: "qrc:/resources/icons/copy.svg"
                     ghost: true
                     onClicked: app.copyToClipboard(artifactArea.text)
                 }
 
                 AppButton {
-                    text: "Abrir"
+                    text: artifactPanel.width < 420 ? "" : "Abrir"
+                    ToolTip.text: "Abrir no aplicativo padrão"
+                    ToolTip.visible: hovered
                     icon.source: "qrc:/resources/icons/open.svg"
                     ghost: true
                     onClicked: app.openPath(app.artifactPath)
                 }
 
                 AppButton {
-                    text: "Salvar"
+                    text: artifactPanel.width < 420 ? "" : "Salvar"
+                    ToolTip.text: "Salvar arquivo"
+                    ToolTip.visible: hovered
                     icon.source: "qrc:/resources/icons/save.svg"
                     primary: true
                     onClicked: app.saveArtifact(artifactArea.text)
                 }
 
-                AppButton {
-                    text: "Fechar"
-                    icon.source: "qrc:/resources/icons/close.svg"
-                    ghost: true
-                    onClicked: app.closeArtifact()
-                }
+                Item { Layout.fillWidth: true }
             }
 
             AppTabBar {
@@ -170,6 +244,7 @@ RowLayout {
                 ScrollView {
                     CopyableTextArea {
                         id: artifactArea
+                        objectName: "artifactEditor"
                         wrapMode: TextArea.NoWrap
                         font.family: "Consolas"
                         font.pointSize: theme.codeFontSize
@@ -450,6 +525,8 @@ RowLayout {
         function onArtifactChanged() {
             if (app.artifactVisible)
                 artifactArea.text = app.artifactContent
+            else
+                main.artifactExpanded = false
         }
     }
 }

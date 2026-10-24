@@ -230,7 +230,8 @@ for line in sys.stdin:
         script.close();
         api.response = [](const QJsonObject &request) {
             const auto messages = request.value("messages").toArray();
-            if (messages.last().toObject().value("role") == "tool") return answer("Pronto");
+            if (messages.last().toObject().value("role") == "tool"
+                || messages.last().toObject().value("role") == "system") return answer("Pronto");
             const QString server = request.value("conversation_id").toInt() == 11 ? "alpha" : "beta";
             return tool("mcp__" + server + "__echo", {});
         };
@@ -330,10 +331,10 @@ for line in sys.stdin:
         Config::instance().ui().notifyOnFinish = false;
         Config::instance().ui().permissionMode = "ask";
     }
-    void finalResponseAfterStepLimit() {
+    void continuesBeyondTwelveRounds() {
         MockApi api; QTemporaryDir dir;
         api.response = [&api, &dir](const QJsonObject &) {
-            return api.requests.size() <= 12 ? tool("list_files", {{"path", dir.path()}}, api.requests.size()) : answer("Concluído com os resultados disponíveis.");
+            return api.requests.size() <= 20 ? tool("list_files", {{"path", dir.path()}}, api.requests.size()) : answer("Concluído com os resultados disponíveis.");
         };
         Config::instance().api().baseUrl = api.url();
         AppController controller; controller.setCurrentModel("deepseek-flash");
@@ -342,22 +343,141 @@ for line in sys.stdin:
         });
         controller.send("Teste de etapas");
         QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 8000);
-        QCOMPARE(api.requests.size(), 13);
-        QVERIFY(!api.requests.last().contains("tools"));
+        QCOMPARE(api.requests.size(), 22);
+        QVERIFY(api.requests.last().contains("tools"));
         QCOMPARE(api.requests.last().value("model").toString(), QString("deepseek-flash"));
         const auto messages = api.requests.last().value("messages").toArray();
         int assistants = 0, results = 0;
         for (const auto &entry : messages) {
             const auto item = entry.toObject();
-            if (item.value("role") == "assistant") {
+            if (item.value("role") == "assistant" && item.contains("tool_calls")) {
                 ++assistants;
                 QVERIFY(item.value("reasoning_content").toString().startsWith("Contexto da etapa"));
             }
             if (item.value("role") == "tool") ++results;
         }
-        QCOMPARE(assistants, 12); QCOMPARE(results, 12);
+        QCOMPARE(assistants, 20); QCOMPARE(results, 20);
         const auto *model = controller.messageModel();
         QCOMPARE(model->data(model->index(model->rowCount() - 1, 0), MessageListModel::ContentRole).toString(), QString("Concluído com os resultados disponíveis."));
+    }
+    void reviewResumesPendingWork() {
+        MockApi api; QTemporaryDir dir;
+        api.response = [&api, &dir](const QJsonObject &) {
+            const int n = api.requests.size();
+            if (n == 1 || n == 3 || n == 5)
+                return tool("list_files", {{"path", dir.path()}}, n);
+            if (n < 6) return answer("Vou continuar a implementação.");
+            return answer("Implementação e verificação concluídas.");
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        connect(&controller, &AppController::approvalRequested, &controller, [&controller] {
+            QTimer::singleShot(0, &controller, [&controller] { controller.resolveApproval(true, false); });
+        });
+        controller.send("Implemente o site completo");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 8000);
+        QCOMPARE(api.requests.size(), 7);
+        QVERIFY(api.requests.at(2).value("messages").toArray().last().toObject()
+                    .value("content").toString().contains("Antes de encerrar"));
+        const auto *model = controller.messageModel();
+        QCOMPARE(model->data(model->index(model->rowCount()-1), MessageListModel::ContentRole).toString(),
+                 QString("Implementação e verificação concluídas."));
+    }
+    void runawayLoopStopsAndKeepsToolContext() {
+        MockApi api; QTemporaryDir dir;
+        api.response = [&api, &dir](const QJsonObject &) {
+            return tool("list_files", {{"path", dir.path()}}, api.requests.size());
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        connect(&controller, &AppController::approvalRequested, &controller, [&controller] {
+            QTimer::singleShot(0, &controller, [&controller] { controller.resolveApproval(true, false); });
+        });
+        controller.send("Teste de ciclo");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 20000);
+        QCOMPARE(api.requests.size(), 128);
+        const auto *model = controller.messageModel();
+        QVERIFY(model->data(model->index(model->rowCount()-1), MessageListModel::ErrorRole)
+                    .toString().contains("128 rodadas"));
+        int results = 0;
+        for (const Message &message : controller.m_history)
+            if (message.role == "tool") ++results;
+        QCOMPARE(results, 128);
+        api.response = [](const QJsonObject &) { return answer("Retomado."); };
+        controller.send("continuar");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        int submittedResults = 0;
+        for (const auto &message : api.requests.last().value("messages").toArray())
+            if (message.toObject().value("role") == "tool") ++submittedResults;
+        QCOMPARE(submittedResults, 128);
+    }
+    void outputLimitContinuationIsBounded() {
+        MockApi api;
+        api.response = [](const QJsonObject &) {
+            return delta({{"content", "Trecho recebido"}}, "length") + "data: [DONE]\n\n";
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        controller.send("Gere um texto longo");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 5000);
+        QCOMPARE(api.requests.size(), 4);
+        QVERIFY(!api.requests.at(1).value("persist_user").toBool(true));
+        const auto messages = api.requests.at(1).value("messages").toArray();
+        QCOMPARE(messages.at(messages.size()-2).toObject().value("content").toString(), QString("Trecho recebido"));
+        const auto *model = controller.messageModel();
+        QVERIFY(model->data(model->index(model->rowCount()-1), MessageListModel::ErrorRole)
+                    .toString().contains("limite de saída"));
+    }
+    void outputLimitContinuesToCompletion() {
+        MockApi api;
+        api.response = [&api](const QJsonObject &) {
+            return api.requests.size() == 1
+                ? delta({{"content", "Primeira parte"}}, "length") + "data: [DONE]\n\n"
+                : answer("Segunda parte e conclusão.");
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        controller.send("Gere um texto longo");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        QCOMPARE(api.requests.size(), 2);
+        const auto *model = controller.messageModel();
+        QCOMPARE(model->data(model->index(model->rowCount()-1), MessageListModel::ContentRole).toString(),
+                 QString("Segunda parte e conclusão."));
+        QVERIFY(model->data(model->index(model->rowCount()-1), MessageListModel::ErrorRole).toString().isEmpty());
+    }
+    void truncatedToolIsNeverExecutedOrRetried() {
+        MockApi api; QTemporaryDir dir;
+        const QString path = dir.path() + "/must-not-exist.txt";
+        api.response = [path](const QJsonObject &) {
+            auto body = tool("write_file", {{"path", path}, {"content", "never"}});
+            body.replace("tool_calls\"}", "length\"}");
+            return body;
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        QSignalSpy approval(&controller, &AppController::approvalRequested);
+        controller.send("Teste ferramenta cortada");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        QCOMPARE(api.requests.size(), 1);
+        QCOMPARE(approval.count(), 0);
+        QVERIFY(!QFile::exists(path));
+    }
+    void networkFailureDoesNotReplayTools() {
+        MockApi api; QTemporaryDir dir;
+        api.response = [&api, &dir](const QJsonObject &) {
+            if (api.requests.size() == 1) return tool("list_files", {{"path", dir.path()}});
+            return delta({{"content", "Parcial"}}); // Unexpected EOF, not a clean output limit.
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        connect(&controller, &AppController::approvalRequested, &controller, [&controller] {
+            QTimer::singleShot(0, &controller, [&controller] { controller.resolveApproval(true, false); });
+        });
+        controller.send("Teste interrupção");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        QCOMPARE(api.requests.size(), 2);
+        QCOMPARE(controller.m_history.last().content, QString("Parcial"));
+        QVERIFY(controller.m_history.at(controller.m_history.size()-2).role == "tool");
     }
     void stopWhileWaitingApproval() {
         MockApi api;
@@ -393,7 +513,7 @@ for line in sys.stdin:
         QVERIFY(approval.last().at(1).toString().contains("PERIGOSO"));
         controller.resolveApproval(false, false);
         QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 5000);
-        QCOMPARE(api.requests.size(), 3);
+        QCOMPARE(api.requests.size(), 4);
     }
     void dangerousCommandRequiresApprovalInFullMode() {
         MockApi api;
@@ -423,7 +543,7 @@ for line in sys.stdin:
         QTRY_COMPARE_WITH_TIMEOUT(approval.count(), 2, 5000);
         controller.resolveApproval(false, false);
         QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 5000);
-        QCOMPARE(api.requests.size(), 3);
+        QCOMPARE(api.requests.size(), 4);
     }
     void writeFileCompletesBeforeReportingSuccess() {
         MockApi api; QTemporaryDir dir;
@@ -443,7 +563,7 @@ for line in sys.stdin:
         QFile file(path);
         QVERIFY(file.open(QIODevice::ReadOnly));
         QCOMPARE(file.readAll(), QByteArray("Conteúdo salvo\n"));
-        const QJsonArray messages = api.requests.last().value("messages").toArray();
+        const QJsonArray messages = api.requests.at(1).value("messages").toArray();
         const QJsonObject result = QJsonDocument::fromJson(
             messages.last().toObject().value("content").toString().toUtf8()).object();
         QCOMPARE(result.value("ok").toBool(), true);
@@ -463,8 +583,8 @@ for line in sys.stdin:
         });
         controller.send("Teste local de aspas");
         QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 5000);
-        QCOMPARE(api.requests.size(), 2);
-        const auto messages = api.requests.last().value("messages").toArray();
+        QCOMPARE(api.requests.size(), 3);
+        const auto messages = api.requests.at(1).value("messages").toArray();
         const auto result = QJsonDocument::fromJson(messages.last().toObject().value("content").toString().toUtf8()).object();
         QCOMPARE(result.value("exit_code").toInt(-1), 0);
         QVERIFY2(result.value("output").toString().contains("aspas e espaços"), qPrintable(result.value("output").toString()));

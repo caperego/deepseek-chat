@@ -141,6 +141,7 @@ void StreamClient::send(qint64 conversationId, qint64 projectId,
     m_currentEvent.clear();
     m_streamError.clear();
     m_finishReason.clear();
+    m_outputLimited = false;
     m_done = false;
     m_cancelled = false;
 
@@ -373,9 +374,13 @@ void StreamClient::onReplyFinished()
     if (failure.isEmpty() && !m_done && m_finishReason.isEmpty())
         failure = QStringLiteral("A conexão terminou antes de concluir a resposta. "
                                  "O conteúdo recebido foi mantido; você pode pedir para continuar.");
-    if (failure.isEmpty() && m_finishReason == QLatin1String("length"))
+    if (failure.isEmpty() && m_finishReason == QLatin1String("length")) {
+        // Only a clean, explicitly truncated text response is safe to continue.
+        // Never execute or replay a partial tool call or a failed network request.
+        m_outputLimited = m_toolCalls.isEmpty() && !m_fullText.trimmed().isEmpty();
         failure = QStringLiteral("A resposta atingiu o limite de saída do modelo. "
                                  "Peça para continuar a partir do trecho recebido.");
+    }
     if (failure.isEmpty() && (m_finishReason == QLatin1String("content_filter")
         || m_finishReason == QLatin1String("insufficient_system_resource")))
         failure = QStringLiteral("O modelo interrompeu a resposta (%1). Tente novamente.")

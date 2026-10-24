@@ -8,6 +8,15 @@ RowLayout {
     spacing: 0
     property int navigationWidth: app.sidebarWidth
     property bool navigationCollapsed: app.sidebarCollapsed
+    property bool workspaceOpen: false
+    property bool workspaceExpanded: false
+    property real workspaceHeight: 360
+    function openWorkspace(tab) {
+        artifactExpanded = false
+        if (app.artifactVisible) workspaceExpanded = true
+        workspaceOpen = true
+        workspace.selectTab(tab)
+    }
     property real artifactWidth: 460
     property bool artifactExpanded: false
     readonly property real artifactMaximumWidth: Math.max(280,
@@ -64,6 +73,7 @@ RowLayout {
         Layout.preferredWidth: Math.min(main.navigationWidth, Math.max(220, main.width * 0.38))
         Layout.fillHeight: true
         onCollapseRequested: main.toggleNavigation()
+        onWorkspaceRequested: function(tab) { main.openWorkspace(tab) }
     }
 
     Rectangle {
@@ -95,20 +105,52 @@ RowLayout {
         }
     }
 
-    StackLayout {
+    ColumnLayout {
         objectName: "conversationPane"
         visible: !main.artifactExpanded
         Layout.fillWidth: true
         Layout.fillHeight: true
-        currentIndex: app.viewMode
-
-        ChatView {}
-        ProjectView {}
+        spacing: 0
+        StackLayout {
+            visible: !main.workspaceOpen || !main.workspaceExpanded
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: app.viewMode
+            ChatView {}
+            ProjectView {}
+        }
+        Rectangle {
+            visible: main.workspaceOpen && !main.workspaceExpanded
+            Layout.fillWidth: true
+            Layout.preferredHeight: 8
+            color: theme.border
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.SizeVerCursor
+                property real startY: 0
+                property real startHeight: 0
+                onPressed: function(event) { startY = mapToItem(main, event.x, event.y).y; startHeight = workspace.height }
+                onPositionChanged: function(event) {
+                    if (pressed) main.workspaceHeight = Math.max(240, Math.min(main.height - 240,
+                        startHeight + startY - mapToItem(main, event.x, event.y).y))
+                }
+            }
+        }
+        WorkspaceTools {
+            id: workspace
+            visible: main.workspaceOpen
+            Layout.fillWidth: true
+            Layout.fillHeight: main.workspaceExpanded
+            Layout.preferredHeight: Math.min(main.workspaceHeight, main.height * 0.55)
+            expanded: main.workspaceExpanded
+            onCloseRequested: main.workspaceOpen = false
+            onExpandRequested: main.workspaceExpanded = !main.workspaceExpanded
+        }
     }
 
     Rectangle {
         objectName: "artifactResizeHandle"
-        visible: app.artifactVisible && !main.artifactExpanded
+        visible: app.artifactVisible && !main.artifactExpanded && !(main.workspaceOpen && main.workspaceExpanded)
         Layout.preferredWidth: 8
         Layout.fillHeight: true
         color: artifactResizeMouse.containsMouse || artifactResizeMouse.pressed ? theme.selected : theme.bg
@@ -148,7 +190,7 @@ RowLayout {
             : Math.min(main.artifactWidth, main.artifactMaximumWidth)
         Layout.fillWidth: main.artifactExpanded
         Layout.fillHeight: true
-        visible: app.artifactVisible
+        visible: app.artifactVisible && !(main.workspaceOpen && main.workspaceExpanded)
         color: theme.bg
 
         Rectangle {
@@ -441,6 +483,10 @@ RowLayout {
                   run: function() { navigation.openNewProject() } },
                 { title: "Abrir configurações", hint: "Tema, modelo, áudio e preferências",
                   run: function() { navigation.openSettings() } },
+                { title: "Tarefas em segundo plano", hint: "Acompanhar comandos e conversas",
+                  run: function() { main.openWorkspace(0) } },
+                { title: "Navegador", hint: "Abrir sites e prévias locais",
+                  run: function() { main.openWorkspace(1) } },
                 { title: "Abrir terminal", hint: "Executar comandos no projeto",
                   run: function() { navigation.openTerminal() } },
                 { title: "Atividades", hint: "Ver as ações recentes",

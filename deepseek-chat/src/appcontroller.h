@@ -2,9 +2,12 @@
 
 #include "chattypes.h"
 #include "automationstore.h"
+#include "backgroundtasks.h"
+#include "terminaltext.h"
 
 #include <QAbstractListModel>
 #include <QHash>
+#include <QMap>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
@@ -202,6 +205,8 @@ class AppController : public QObject {
     Q_PROPERTY(QVariantMap balanceInfo READ balanceInfo NOTIFY balanceChanged)
     Q_PROPERTY(QVariantList searchResults READ searchResults NOTIFY searchResultsChanged)
     Q_PROPERTY(QVariantList projectMemories READ projectMemories NOTIFY projectMemoriesChanged)
+    Q_PROPERTY(QVariantList backgroundTasks READ backgroundTasks NOTIFY backgroundTasksChanged)
+    Q_PROPERTY(QVariantList activeRuns READ activeRuns NOTIFY streamingChanged)
     Q_PROPERTY(bool terminalRunning READ terminalRunning NOTIFY terminalChanged)
     Q_PROPERTY(bool artifactVisible READ artifactVisible NOTIFY artifactChanged)
     Q_PROPERTY(QString artifactPath READ artifactPath NOTIFY artifactChanged)
@@ -278,6 +283,13 @@ public:
     QVariantMap balanceInfo() const { return m_balanceInfo; }
     QVariantList searchResults() const { return m_searchResults; }
     QVariantList projectMemories() const { return m_projectMemories; }
+    QVariantList backgroundTasks() const;
+    QVariantList activeRuns() const;
+    Q_INVOKABLE int startBackgroundTask(const QString &command);
+    Q_INVOKABLE QString backgroundTaskOutput(int id) const;
+    Q_INVOKABLE void stopBackgroundTask(int id);
+    Q_INVOKABLE void clearFinishedTasks();
+    Q_INVOKABLE void stopConversationRun(qint64 id);
     bool terminalRunning() const;
     bool artifactVisible() const { return !m_artifactPath.isEmpty(); }
     QString artifactPath() const { return m_artifactPath; }
@@ -425,6 +437,7 @@ signals:
     void projectMemoriesChanged();
     void terminalOutput(const QString &text);
     void terminalChanged();
+    void backgroundTasksChanged();
     void artifactChanged();
     void updateStatusChanged();
     void balanceChanged();
@@ -457,6 +470,9 @@ private:
     void destroyRun(AgentRun *run);
     void destroyAllRuns();
     void startRun(const QString &title, bool persistUser);
+    int launchBackgroundTask(const QString &command, const QString &workdir,
+                             qint64 projectId, qint64 conversationId);
+    void shutdownBackgroundTasks();
     void connectRun(AgentRun *run);
     void pollAutomations();
     void runAutomation(const QVariantMap &task);
@@ -575,6 +591,10 @@ private:
     QWindow *m_window = nullptr;
     bool m_forceQuit = false;
     bool m_trayNotified = false;
+    QMap<int, BackgroundTask *> m_backgroundTasks;
+    int m_backgroundTaskId = 0;
+    bool m_backgroundUpdatePending = false;
+    TerminalText m_terminalText;
     QProcess *m_terminal = nullptr;
     void *m_conpty = nullptr;
     bool m_terminalRunning = false;

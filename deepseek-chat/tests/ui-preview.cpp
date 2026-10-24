@@ -2,6 +2,7 @@
 #include "config.h"
 #include "qmltheme.h"
 #include <QApplication>
+#include <QtWebEngineQuick>
 #include <QDir>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -13,12 +14,16 @@
 #include <QQuickItem>
 #include <QTest>
 #include <cstdio>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QJSValue>
 
 // Render the actual application resources using fictional data only.
 // Never load the developer's config, account, MCP processes, or remote API.
 class UiPreview {
 public:
     static void prepare(AppController &app, const QString &path) {
+        app.m_activeProject.workdir = path;
         app.m_user.id = 1;
         app.m_user.username = QStringLiteral("demonstracao");
         app.m_user.displayName = QStringLiteral("Demonstração");
@@ -61,6 +66,7 @@ public:
 
 int main(int argc, char **argv) {
     qputenv("QT_QUICK_CONTROLS_STYLE", "Fusion");
+    QtWebEngineQuick::initialize();
     QApplication application(argc, argv);
     QLoggingCategory::setFilterRules(QStringLiteral("*.debug=false\n*.warning=true\n*.critical=true"));
     if (argc < 2) return 2;
@@ -95,6 +101,68 @@ int main(int argc, char **argv) {
     auto *automations = window->findChild<QObject *>(QStringLiteral("automationsDialog"));
     auto *commandEditor = window->findChild<QObject *>(QStringLiteral("globalCommandEditor"));
     if (!settings || !automations) return 1;
+    if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QLatin1String("--workspace")) {
+        QTimer::singleShot(300, [&] {
+            auto check = [](bool ok, const char *message) {
+                if (!ok) { std::fprintf(stderr, "%s\n", message); QCoreApplication::exit(1); }
+                return ok;
+            };
+            auto *main = window->findChild<QQuickItem *>(QStringLiteral("mainView"));
+            auto *tools = window->findChild<QQuickItem *>(QStringLiteral("workspaceTools"));
+            if (!check(main && tools, "Painel de ferramentas ausente")) return;
+            QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 0));
+            QTest::qWait(150);
+            const int id = app.startBackgroundTask("printf TASK_VISIBLE; sleep 30");
+            tools->setProperty("selectedTask", id);
+            QTest::qWait(250);
+            if (!check(app.backgroundTaskOutput(id).contains("TASK_VISIBLE"), "Tarefa não iniciou")) return;
+            main->setProperty("workspaceOpen", false);
+            QTest::qWait(100);
+            if (!check(app.backgroundTasks().first().toMap().value("running").toBool(), "Recolher parou a tarefa")) return;
+            QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 2));
+            app.runTerminalCommand("printf '%s_%s\\n' TERMINAL VISIVEL");
+            for (int i = 0; i < 30 && !tools->property("terminalText").toString().contains("TERMINAL_VISIVEL"); ++i) QTest::qWait(100);
+            if (!check(tools->property("terminalText").toString().contains("TERMINAL_VISIVEL"), "Terminal não mostrou saída")) return;
+            save(QStringLiteral("terminal-integrado"));
+            app.killTerminal();
+            QTcpServer server;
+            server.listen(QHostAddress::LocalHost);
+            QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
+                while (server.hasPendingConnections()) {
+                    auto *socket = server.nextPendingConnection();
+                    QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket] {
+                        socket->readAll();
+                        const QByteArray body = "<html><head><title>Preview local OK</title></head><body style='font-family:sans-serif;padding:32px'><h1>Previa do projeto</h1><button id='check' onclick=\"document.title='Interacao OK'\">Testar interacao</button></body></html>";
+                        socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                        socket->disconnectFromHost();
+                    });
+                    QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                }
+            });
+            QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 1));
+            main->setProperty("workspaceExpanded", true);
+            QTest::qWait(400);
+            auto *browser = window->findChild<QObject *>(QStringLiteral("browserPane"));
+            auto *web = window->findChild<QObject *>(QStringLiteral("workspaceWebView"));
+            if (!check(browser && web, "Navegador não carregou")) return;
+            const QString url = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
+            QMetaObject::invokeMethod(browser, "navigate", Q_ARG(QVariant, url));
+            for (int i = 0; i < 100 && web->property("title").toString() != "Preview local OK"; ++i) QTest::qWait(100);
+            if (!check(web->property("title").toString() == "Preview local OK", "Página HTTP não carregou")) return;
+            engine.globalObject().setProperty("qaWeb", engine.newQObject(web));
+            engine.evaluate(QStringLiteral("qaWeb.runJavaScript(\"document.getElementById('check').click()\")"));
+            for (int i = 0; i < 30 && web->property("title").toString() != "Interacao OK"; ++i) QTest::qWait(100);
+            if (!check(web->property("title").toString() == "Interacao OK", "JavaScript não interagiu com a página")) return;
+            save(QStringLiteral("navegador-integrado"));
+            QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 0));
+            QTest::qWait(150);
+            save(QStringLiteral("tarefas-segundo-plano"));
+            app.stopBackgroundTask(id);
+            std::fprintf(stdout, "Workspace: tarefa em segundo plano, terminal PTY, HTTP local e JavaScript verificados.\n");
+            QCoreApplication::exit(0);
+        });
+        return application.exec();
+    }
     if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QLatin1String("--artifact")) {
         QFile file(temporary.path() + QStringLiteral("/demonstracao.md"));
         if (!file.open(QIODevice::WriteOnly)) return 1;

@@ -69,6 +69,7 @@
 #include <thread>
 #else
 #include <pty.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -76,7 +77,7 @@
 
 namespace {
 
-const char *kAppVersion = "1.2.2";
+const char *kAppVersion = "1.3.0";
 const int kMaxAgentRounds = 128;
 const int kMaxOutputContinuations = 3;
 const int kMaxListEntries = 500;
@@ -294,8 +295,9 @@ QString terminalShellProgram()
 #ifdef Q_OS_WIN
     return QStringLiteral("cmd.exe");
 #else
-    const QString shell = qEnvironmentVariable("SHELL");
-    return shell.isEmpty() ? QStringLiteral("/bin/bash") : shell;
+    // A linear transcript must not load shell themes that rely on cursor positioning.
+    return QFileInfo::exists(QStringLiteral("/bin/bash"))
+        ? QStringLiteral("/bin/bash") : QStringLiteral("/bin/sh");
 #endif
 }
 
@@ -964,6 +966,8 @@ AppController::AppController(QObject *parent)
 
 AppController::~AppController()
 {
+    shutdownBackgroundTasks();
+    killTerminal();
     destroyAllRuns();
     for (McpServer *server : m_mcpServers) {
         if (server->process) {
@@ -1237,6 +1241,8 @@ void AppController::registerUser(const QString &username, const QString &display
 
 void AppController::logout()
 {
+    shutdownBackgroundTasks();
+    killTerminal();
     m_api->logout();
     m_api->clearToken();
 
@@ -2379,6 +2385,7 @@ void AppController::sendRound(AgentRun *run)
         return;
     }
     ++run->round;
+    emit streamingChanged();
     if (run->round > 1 && displayingRun(run))
         m_messages->beginAssistant();
 
@@ -2591,7 +2598,8 @@ void AppController::executeToolCall(AgentRun *run, const ToolCall &call)
 {
     bool outside = false;
     QString parseError;
-    const bool dangerous = call.name == QLatin1String("run_command")
+    const bool dangerous = (call.name == QLatin1String("run_command")
+        || call.name == QLatin1String("start_background_task"))
         && isDangerousCommand(parseArguments(call, &parseError)
                                   .value(QStringLiteral("command")).toString())
         && parseError.isEmpty();
@@ -2639,6 +2647,29 @@ void AppController::executeToolCall(AgentRun *run, const ToolCall &call)
 
 void AppController::performToolCall(AgentRun *run, const ToolCall &call)
 {
+    if (call.name == QLatin1String("start_background_task")
+        || call.name == QLatin1String("background_task_status")
+        || call.name == QLatin1String("stop_background_task")) {
+        QString error;
+        const auto args = parseArguments(call, &error);
+        int id = args.value(QStringLiteral("task_id")).toInt();
+        if (error.isEmpty() && call.name == QLatin1String("start_background_task"))
+            id = launchBackgroundTask(args.value(QStringLiteral("command")).toString(),
+                                      run->workdir, run->projectId, run->conversationId);
+        auto *task = m_backgroundTasks.value(id);
+        QJsonObject result;
+        if (!error.isEmpty() || !task) result.insert(QStringLiteral("error"), error.isEmpty()
+            ? QStringLiteral("Tarefa indisponível ou limite atingido.") : error);
+        else {
+            if (call.name == QLatin1String("stop_background_task")) stopBackgroundTask(id);
+            result = {{"task_id", id}, {"running", task->process != nullptr},
+                      {"status", task->status}, {"exit_code", task->exitCode},
+                      {"output", backgroundTaskOutput(id)}};
+        }
+        finishToolCall(run, QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)),
+                       QStringLiteral("⚙ %1: tarefa %2").arg(call.name).arg(id));
+        return;
+    }
     if (call.name == QLatin1String("fetch_url")) {
         fetchUrl(run, call);
         return;
@@ -3219,6 +3250,20 @@ void AppController::clearSearch()
     emit searchResultsChanged();
 }
 
+QVariantList AppController::activeRuns() const
+{
+    QVariantList result;
+    for (const auto *run : m_runs)
+        result.append(QVariantMap{{"conversationId", run->conversationId}, {"title", run->title},
+                                  {"round", run->round}});
+    return result;
+}
+
+void AppController::stopConversationRun(qint64 id)
+{
+    if (auto *run = runFor(id)) stopRun(run);
+}
+
 bool AppController::terminalRunning() const
 {
     return m_terminalRunning;
@@ -3226,8 +3271,8 @@ bool AppController::terminalRunning() const
 
 void AppController::runTerminalCommand(const QString &command)
 {
-    const QString trimmed = command.trimmed();
-    if (trimmed.isEmpty())
+    const QString trimmed = m_terminalRunning ? command : command.trimmed();
+    if (trimmed.isEmpty() && !m_terminalRunning)
         return;
 
 #ifdef Q_OS_WIN
@@ -3243,7 +3288,7 @@ void AppController::runTerminalCommand(const QString &command)
     }
     if (!pty && !m_conpty) {
         auto *created = new ConPty(this,
-            [this](const QString &text) { emit terminalOutput(text); },
+            [this](const QString &text) { emit terminalOutput(m_terminalText.consume(text.toUtf8())); },
             [this](int code) {
                 m_terminalRunning = false;
                 emit terminalOutput(
@@ -3273,9 +3318,18 @@ void AppController::runTerminalCommand(const QString &command)
     if (!m_terminal && m_ptyMaster < 0) {
         int master = -1;
         int slave = -1;
-        if (openpty(&master, &slave, nullptr, nullptr, nullptr) == 0) {
+        struct winsize size = {30, 120, 0, 0};
+        if (openpty(&master, &slave, nullptr, nullptr, &size) == 0) {
+            m_terminalText.reset();
             auto *process = new QProcess(this);
             process->setProcessChannelMode(QProcess::ForwardedChannels);
+            auto environment = QProcessEnvironment::systemEnvironment();
+            environment.insert(QStringLiteral("TERM"), QStringLiteral("xterm-256color"));
+            environment.insert(QStringLiteral("PS1"), QStringLiteral("\\w $ "));
+            environment.insert(QStringLiteral("PROMPT"), QStringLiteral("%~ %# "));
+            environment.insert(QStringLiteral("RPROMPT"), QString());
+            environment.remove(QStringLiteral("PROMPT_COMMAND"));
+            process->setProcessEnvironment(environment);
             const int slaveFd = slave;
             process->setChildProcessModifier([slaveFd]() {
                 setsid();
@@ -3286,7 +3340,15 @@ void AppController::runTerminalCommand(const QString &command)
                 if (slaveFd > 2)
                     close(slaveFd);
             });
-            process->start(terminalShellProgram());
+            process->setWorkingDirectory(m_activeProject.workdir.isEmpty()
+                ? QDir::homePath() : m_activeProject.workdir);
+            const QString shell = terminalShellProgram();
+            const QString name = QFileInfo(shell).fileName();
+            QStringList arguments;
+            if (name == QLatin1String("bash")) arguments = {"--noprofile", "--norc", "-i"};
+            else if (name == QLatin1String("zsh")) arguments = {"-f", "-i"};
+            else arguments = {"-i"};
+            process->start(shell, arguments);
             if (process->waitForStarted(5000)) {
                 ::close(slave);
                 m_ptyMaster = master;
@@ -3296,8 +3358,7 @@ void AppController::runTerminalCommand(const QString &command)
                     char buffer[4096];
                     const ssize_t n = ::read(m_ptyMaster, buffer, sizeof(buffer));
                     if (n > 0)
-                        emit terminalOutput(QString::fromUtf8(buffer,
-                                                              static_cast<int>(n)));
+                        emit terminalOutput(m_terminalText.consume(QByteArray(buffer, static_cast<int>(n))));
                 });
                 m_ptyNotifier = notifier;
                 connect(process, QOverload<int, QProcess::ExitStatus>::of(
@@ -3331,7 +3392,6 @@ void AppController::runTerminalCommand(const QString &command)
         }
     }
     if (m_ptyMaster >= 0) {
-        emit terminalOutput(QStringLiteral("> ") + trimmed + QLatin1Char('\n'));
         const QByteArray payload = trimmed.toUtf8() + QByteArrayLiteral("\n");
         const ssize_t written = ::write(m_ptyMaster, payload.constData(),
                                         static_cast<size_t>(payload.size()));
@@ -3407,6 +3467,12 @@ void AppController::killTerminal()
 #endif
     if (!m_terminal)
         return;
+#ifndef Q_OS_WIN
+    if (m_ptyMaster >= 0) {
+        const pid_t foreground = ::tcgetpgrp(m_ptyMaster);
+        if (foreground > 0 && foreground != ::getpgrp()) ::kill(-foreground, SIGKILL);
+    }
+#endif
     m_terminal->kill();
 }
 
@@ -4452,7 +4518,10 @@ QString AppController::agentContextText() const
                             : QDir::toNativeSeparators(m_activeProject.workdir));
     context += QStringLiteral("\nModo de permissão atual: %1.").arg(modeText);
     context += QStringLiteral(
-        "\nProssiga com as ferramentas até concluir o trabalho solicitado. Não encerre com "
+        "\nPara servidores e comandos longos, use start_background_task; acompanhe com "
+        "background_task_status e finalize com stop_background_task quando não forem mais necessários. "
+        "Não confunda tarefa iniciada com tarefa concluída. "
+        "Prossiga com as ferramentas até concluir o trabalho solicitado. Não encerre com "
         "promessas de executar a próxima etapa nem peça ‘continuar’ se já tem autorização. "
         "Conclua a tarefa com uma resposta final que descreva o resultado e o que "
         "não conseguiu concluir. Evite repetir verificações sem novas evidências.");
@@ -4469,6 +4538,17 @@ QString AppController::agentContextText() const
 bool AppController::toolNeedsApproval(const AgentRun *run, const ToolCall &call,
                                       bool *outsideWorkdir) const
 {
+    if (call.name == QLatin1String("start_background_task")) {
+        ToolCall command = call;
+        command.name = QStringLiteral("run_command");
+        return toolNeedsApproval(run, command, outsideWorkdir);
+    }
+    if (call.name == QLatin1String("background_task_status")
+        || call.name == QLatin1String("stop_background_task")) {
+        const auto args = parseArguments(call, nullptr);
+        const auto *task = m_backgroundTasks.value(args.value(QStringLiteral("task_id")).toInt());
+        return task && (task->projectId != run->projectId || task->conversationId != run->conversationId);
+    }
     if (call.name == QLatin1String("run_command")) {
         QString parseError;
         const QJsonObject args = parseArguments(call, &parseError);
@@ -5524,6 +5604,10 @@ QString AppController::htmlToText(const QString &html)
 
 QString AppController::toolApprovalTitle(const ToolCall &call)
 {
+    if (call.name == QLatin1String("start_background_task")) {
+        ToolCall command = call; command.name = QStringLiteral("run_command");
+        return toolApprovalTitle(command);
+    }
     if (call.name == QLatin1String("fetch_url")
         || call.name == QLatin1String("browse_url")
         || call.name == QLatin1String("search_web"))
@@ -5550,6 +5634,10 @@ QString AppController::toolApprovalTitle(const ToolCall &call)
 QString AppController::toolApprovalDetail(const AgentRun *run, const ToolCall &call,
                                           bool outsideWorkdir) const
 {
+    if (call.name == QLatin1String("start_background_task")) {
+        ToolCall command = call; command.name = QStringLiteral("run_command");
+        return toolApprovalDetail(run, command, outsideWorkdir);
+    }
     QString error;
     const QJsonObject args = parseArguments(call, &error);
     if (call.name == QLatin1String("search_web"))
@@ -5631,6 +5719,17 @@ QJsonArray AppController::toolDefinitions()
     };
 
     QJsonArray tools;
+    tools.append(makeTool(QStringLiteral("start_background_task"),
+        QStringLiteral("Inicia comando longo/servidor em segundo plano na pasta do projeto e retorna task_id. "
+                       "Não aguarda conclusão. Use background_task_status para acompanhar; iniciar não comprova sucesso."),
+        QJsonObject{{"command", stringProp(QStringLiteral("Comando shell a executar."))}}, QJsonArray{"command"}));
+    const QJsonObject taskProps{{"task_id", intProp(QStringLiteral("ID da tarefa iniciada."))}};
+    tools.append(makeTool(QStringLiteral("background_task_status"),
+        QStringLiteral("Consulta estado e saída de uma tarefa; evite consultas repetidas sem necessidade."),
+        taskProps, QJsonArray{"task_id"}));
+    tools.append(makeTool(QStringLiteral("stop_background_task"),
+        QStringLiteral("Cancela uma tarefa em segundo plano."), taskProps, QJsonArray{"task_id"}));
+
 
     QJsonObject listProps;
     listProps.insert(QStringLiteral("path"), stringProp(QStringLiteral(

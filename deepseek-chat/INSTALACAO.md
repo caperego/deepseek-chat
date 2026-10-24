@@ -277,7 +277,7 @@ bash linux/package.sh
 ```
 
 Os arquivos `.run`, `.tar.gz` e os hashes SHA-256 ficam em `dist/`.
-Execute `bash dist/deepseek-chat-1.2.2-linux-x86_64.run` para instalar
+Execute `bash dist/deepseek-chat-1.3.0-linux-x86_64.run` para instalar
 em `~/.local/share/deepseek-chat`, com atalho no menu e em `~/.local/bin`.
 O instalador preserva as configurações nas atualizações e não inclui credenciais
 da máquina de compilação. Configure a URL do backend no aplicativo após instalar.
@@ -287,3 +287,18 @@ e abra novamente para carregar a atualização. Esta versão requer Qt 6.11 ou s
 O pacote utiliza Qt e glibc do sistema. A compilação feita no Manjaro/Arch
 requer bibliotecas compatíveis; para outras distribuições, gere o pacote nelas.
 Consulte o `LEIA-ME.txt` dentro do arquivo `.tar.gz` para dependências e remoção.
+
+
+### Painel de trabalho (1.3.0)
+
+Use **Tarefas em segundo plano**, **Navegador** ou **Terminal** na barra lateral.
+O painel pode ser ampliado, recolhido e redimensionado pela divisória horizontal.
+Recolher mantém os processos; Sair encerra as tarefas. O histórico de tarefas,
+a saída do terminal e o perfil do navegador são locais à sessão do aplicativo.
+As automações agendadas continuam sendo configuradas em Automações.
+
+O navegador visual requer o módulo Qt WebEngine Quick. No Manjaro/Arch,
+instale `qt6-webengine` junto das demais dependências. No instalador do Qt para
+Windows, selecione também Qt WebEngine. Os novos recursos foram validados no
+Linux; a implementação Windows usa os caminhos existentes de ConPTY/cmd.exe e
+não foi validada nesta revisão. O terminal linear não emula telas completas.

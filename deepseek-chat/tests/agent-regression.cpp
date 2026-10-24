@@ -87,6 +87,92 @@ static QByteArray tool(const QString &name, const QJsonObject &args, int number 
 class AgentRegression : public QObject {
     Q_OBJECT
 private slots:
+    void terminalTranscriptHandlesSplitUtf8AndEscapeSequences() {
+        TerminalText text;
+        QCOMPARE(text.consume("\x1b[31mCor\x1b[0m\r\n"), QString("Cor\n"));
+        QCOMPARE(text.consume("\x1b]7;file://secret/path"), QString());
+        QCOMPARE(text.consume("\x1b\\Pronto"), QString("Pronto"));
+        const auto encoded = QString("Ação").toUtf8();
+        QString decoded;
+        for (int i = 0; i < encoded.size(); ++i) decoded += text.consume(encoded.mid(i, 1));
+        QCOMPARE(decoded, QString("Ação"));
+    }
+    void backgroundTasksPreserveCwdOutputAndExitStatus() {
+#ifndef Q_OS_WIN
+        QTemporaryDir dir;
+        AppController controller; controller.m_activeProject.workdir = dir.path();
+        const int id = controller.startBackgroundTask("pwd; printf TASK_OK; exit 7");
+        QVERIFY(id > 0);
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 3000);
+        QCOMPARE(controller.m_backgroundTasks.value(id)->exitCode, 7);
+        QCOMPARE(controller.m_backgroundTasks.value(id)->status, QString("Falhou"));
+        QVERIFY(controller.backgroundTaskOutput(id).contains(dir.path()));
+        QVERIFY(controller.backgroundTaskOutput(id).contains("TASK_OK"));
+        controller.clearFinishedTasks(); QVERIFY(controller.backgroundTasks().isEmpty());
+#endif
+    }
+    void backgroundTasksRunIndependentlyAndCanBeCancelled() {
+#ifndef Q_OS_WIN
+        AppController controller;
+        const int id = controller.startBackgroundTask("printf STARTED; sleep 30");
+        QTRY_VERIFY_WITH_TIMEOUT(controller.backgroundTaskOutput(id).contains("STARTED"), 3000);
+        controller.m_currentConversationId = 123;
+        QVERIFY(controller.m_backgroundTasks.value(id)->process);
+        controller.clearFinishedTasks(); QCOMPARE(controller.backgroundTasks().size(), 1);
+        controller.stopBackgroundTask(id);
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 3000);
+        QCOMPARE(controller.m_backgroundTasks.value(id)->status, QString("Cancelada"));
+#endif
+    }
+    void backgroundTasksBoundConcurrencyAndOutput() {
+#ifndef Q_OS_WIN
+        AppController controller;
+        for (int i = 0; i < 4; ++i) QVERIFY(controller.startBackgroundTask("sleep 30") > 0);
+        QCOMPARE(controller.startBackgroundTask("echo must-not-start"), 0);
+        controller.shutdownBackgroundTasks(); QVERIFY(controller.backgroundTasks().isEmpty());
+        const int id = controller.startBackgroundTask("head -c 400000 /dev/zero; printf THE_END");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 3000);
+        QVERIFY(controller.backgroundTaskOutput(id).size() < 206000);
+        QVERIFY(controller.backgroundTaskOutput(id).contains("THE_END"));
+        QVERIFY(controller.m_backgroundTasks.value(id)->output.truncated());
+#endif
+    }
+    void backgroundToolDoesNotBlockChatAndHonorsApproval() {
+#ifndef Q_OS_WIN
+        MockApi api;
+        api.response = [&api](const QJsonObject &) {
+            return api.requests.size() == 1
+                ? tool("start_background_task", {{"command", "printf READY; sleep 30"}})
+                : answer("Tarefa iniciada, ainda em execução.");
+        };
+        Config::instance().api().baseUrl = api.url();
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        QSignalSpy approvals(&controller, &AppController::approvalRequested);
+        controller.send("Inicie uma tarefa");
+        QTRY_COMPARE_WITH_TIMEOUT(approvals.size(), 1, 3000);
+        QVERIFY(controller.backgroundTasks().isEmpty());
+        controller.resolveApproval(true, false);
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 3000);
+        QCOMPARE(api.requests.size(), 2);
+        QCOMPARE(controller.backgroundTasks().size(), 1);
+        QVERIFY(controller.m_backgroundTasks.first()->process);
+        controller.stopBackgroundTask(controller.m_backgroundTasks.firstKey());
+#endif
+    }
+    void dangerousBackgroundToolStillRequiresApproval() {
+        MockApi api; api.response = [](const QJsonObject &) {
+            return tool("start_background_task", {{"command", "shutdown --help"}});
+        };
+        Config::instance().api().baseUrl = api.url();
+        Config::instance().ui().permissionMode = "full";
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        QSignalSpy approvals(&controller, &AppController::approvalRequested);
+        controller.send("Teste de confirmação");
+        QTRY_COMPARE_WITH_TIMEOUT(approvals.size(), 1, 3000);
+        QVERIFY(approvals.first().at(1).toString().contains("PERIGOSO"));
+        QVERIFY(controller.backgroundTasks().isEmpty());
+        controller.stop();
+    }
     void boundedCommandOutputPreservesHeadAndTail() {
         BoundedOutput output(1024, 256);
         output.append("INICIO\n");

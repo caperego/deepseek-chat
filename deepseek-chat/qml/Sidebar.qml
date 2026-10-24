@@ -6,12 +6,13 @@ import QtQuick.Controls.impl
 Rectangle {
     id: sidebar
     color: theme.sidebar
+    signal workspaceRequested(int tab)
     signal collapseRequested()
     property var collapsedProjects: ({})
 
     function openSettings() { settingsDialog.open() }
     function openNewProject() { newProjectDialog.open() }
-    function openTerminal() { terminalDialog.open() }
+    function openTerminal() { workspaceRequested(2) }
     function openActivities() { activitiesDialog.open() }
     function toggleProject(id) {
         var folded = Object.assign({}, collapsedProjects)
@@ -136,10 +137,23 @@ Rectangle {
         }
 
         SidebarAction {
+            text: "Tarefas em segundo plano"
+            icon.source: "qrc:/resources/icons/list.svg"
+            Layout.fillWidth: true
+            onClicked: sidebar.workspaceRequested(0)
+        }
+        SidebarAction {
+            text: "Navegador"
+            icon.source: "qrc:/resources/icons/globe.svg"
+            Layout.fillWidth: true
+            onClicked: sidebar.workspaceRequested(1)
+        }
+
+        SidebarAction {
             text: "Terminal"
             icon.source: "qrc:/resources/icons/terminal.svg"
             Layout.fillWidth: true
-            onClicked: terminalDialog.open()
+            onClicked: sidebar.openTerminal()
         }
 
         Rectangle {
@@ -624,89 +638,4 @@ Rectangle {
         anchors.centerIn: parent
     }
 
-    AppDialog {
-        id: terminalDialog
-        parent: Overlay.overlay
-        modal: true
-        anchors.centerIn: parent
-        width: 820
-        height: 580
-        title: "Terminal"
-        font.pointSize: theme.fontSize
-        property string output: ""
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
-
-            ScrollView {
-                id: terminalScroll
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-
-                CopyableTextArea {
-                    id: outputArea
-                    readOnly: true
-                    wrapMode: TextArea.NoWrap
-                    font.family: "monospace"
-                    font.pointSize: Math.max(9, theme.fontSize - 2)
-                    color: theme.text
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                AppTextField {
-                    id: terminalInput
-                    Layout.fillWidth: true
-                    placeholderText: "comando…"
-                    onAccepted: terminalDialog.submit()
-                }
-
-                AppButton {
-                    text: "Enviar"
-                    primary: true
-                    onClicked: terminalDialog.submit()
-                }
-
-                AppButton {
-                    text: "Parar"
-                    danger: true
-                    enabled: app.terminalRunning
-                    onClicked: app.killTerminal()
-                }
-
-                AppButton {
-                    text: "Fechar"
-                    ghost: true
-                    onClicked: terminalDialog.close()
-                }
-            }
-        }
-
-        function submit() {
-            if (terminalInput.text.length === 0)
-                return
-            app.runTerminalCommand(terminalInput.text)
-            terminalInput.text = ""
-        }
-
-        function appendOutput(text) {
-            output = output + text
-            if (output.length > 200000)
-                output = output.slice(output.length - 200000)
-            outputArea.text = output
-            outputArea.cursorPosition = outputArea.length
-        }
-    }
-
-    Connections {
-        target: app
-
-        function onTerminalOutput(text) {
-            terminalDialog.appendOutput(text)
-        }
-    }
 }

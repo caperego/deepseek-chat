@@ -236,3 +236,53 @@ SHA-256; `config.ini` e `mcp.json` foram preservados. O teste de reprodução
 usa respostas controladas de servidor local, não valida o comportamento do
 provedor real na conversa do usuário. Voz opcional (`speechd`) indisponível
 no ambiente de testes.
+
+
+## Painel de tarefas, navegador e terminal — 1.3.0
+
+O painel fica abaixo da conversa, tem divisória ajustável e modo ampliado.
+A navegação lateral e a paleta de comandos abrem cada uma das três abas.
+
+Tarefas locais usam processos independentes, até quatro simultâneos e trinta
+registros por sessão, com saída limitada a 200 KiB (início e fim). Há drenagem
+contínua dos pipes e atualizações de interface agrupadas em 100 ms. No Linux,
+cancelamento e encerramento matam o grupo do processo; processos que se
+separem deliberadamente do grupo não são gerenciados por esse mecanismo.
+Limpar concluídas não cancela tarefas ativas. Logout/Sair encerra os processos.
+Iniciar uma tarefa é diferente de concluir; a IA recebe ID, estado e saída.
+As ferramentas são `start_background_task`, `background_task_status` e
+`stop_background_task`. Iniciar reaproveita a política de aprovação de comandos;
+comandos perigosos continuam exigindo aprovação mesmo no modo completo.
+
+O navegador usa Qt WebEngine Quick com perfil temporário isolado e só é
+instanciado na primeira abertura da aba. Navegação HTTP/HTTPS, JavaScript,
+histórico, recarga e abertura externa. Não há WebChannel entre páginas e a API
+do aplicativo. Downloads são encaminhados ao navegador externo por ação do
+usuário. Logout destrói a página/perfil local. Não foi adicionada automação
+visual do navegador pela IA; `browse_url` mantém seu comportamento anterior.
+Referência de inicialização: https://doc.qt.io/qt-6/qtwebenginequick.html.
+
+O terminal existente foi movido do diálogo modal para o painel. A PTY inicia
+na pasta do projeto (ou pasta pessoal), define TERM e tamanho inicial, usa
+Bash sem arquivos de perfil/rc (ou sh, se Bash não existir), sem temas de prompt e aceita
+entrada e Ctrl+C e mantém a sessão ao recolher. Decodificação UTF-8 incremental
+e filtragem de sequências ANSI/OSC evitam códigos de controle visíveis. A saída
+é um transcript linear limitado a 200 mil caracteres, com atualização em 33 ms,
+e não um emulador completo de programas de tela inteira. ConPTY no Windows não
+foi validado. O backend de voz opcional `speechd` permanece indisponível no teste.
+
+A prova de interface `--workspace` inicia uma tarefa real, recolhe o painel e
+verifica que continua; executa printf na PTY e confere a saída efetiva (não só
+o eco do comando); carrega HTTP de um servidor local e clica por JavaScript em
+um botão, conferindo a mudança de título. As imagens contêm dados fictícios.
+
+Resultado final: **52 testes aprovados, zero falhas**, além das provas de
+interface `--workspace` e `--artifact`. As dependências de link dos projetos
+de teste foram corrigidas para reconstruir os executáveis de teste quando
+qualquer objeto do aplicativo muda, evitando validar uma implementação antiga.
+Capturas revisadas visualmente e publicadas com dados fictícios. Qt WebEngine
+foi testado com `--disable-gpu` apenas na prova offscreen; o aplicativo mantém
+as configurações padrão do Chromium e seu sandbox.
+
+Instalador 1.3.0 executado no Linux: configuração e MCP preservados, executável
+instalado idêntico ao compilado por SHA-256.

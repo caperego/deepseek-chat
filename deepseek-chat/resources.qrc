@@ -48,6 +48,8 @@
         <file>qml/CopyableTextEdit.qml</file>
         <file>qml/LoginView.qml</file>
         <file>qml/MainView.qml</file>
+        <file>qml/WorkspaceTools.qml</file>
+        <file>qml/BrowserPane.qml</file>
         <file>qml/Sidebar.qml</file>
         <file>qml/ChatView.qml</file>
         <file>qml/MessageDelegate.qml</file>

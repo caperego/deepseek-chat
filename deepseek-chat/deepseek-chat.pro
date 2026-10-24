@@ -1,4 +1,4 @@
-QT += core gui widgets network sql qml quick texttospeech multimedia pdf
+QT += core gui widgets network sql qml quick texttospeech multimedia pdf webenginequick
 
 CONFIG += c++17
 TEMPLATE = app
@@ -24,6 +24,7 @@ unix:!macx {
 
 SOURCES += \
     src/main.cpp \
+    src/backgroundtasks.cpp \
     src/config.cpp \
     src/theme.cpp \
     src/assets.cpp \
@@ -34,6 +35,8 @@ SOURCES += \
 
 HEADERS += \
     src/chattypes.h \
+    src/backgroundtasks.h \
+    src/terminaltext.h \
     src/config.h \
     src/pathpolicy.h \
     src/toolprotocol.h \

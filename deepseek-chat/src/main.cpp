@@ -4,6 +4,7 @@
 #include "qmltheme.h"
 
 #include <QApplication>
+#include <QtWebEngineQuick>
 #include <QMessageBox>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -13,6 +14,7 @@
 int main(int argc, char *argv[])
 {
     qputenv("QT_QUICK_CONTROLS_STYLE", "Fusion");
+    QtWebEngineQuick::initialize();
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("DeepSeek Chat"));
     QApplication::setOrganizationName(QStringLiteral("DeepSeekChat"));

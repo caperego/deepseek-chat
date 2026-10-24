@@ -22,6 +22,27 @@ Na versão 1.2.1, o painel de arquivos pode ser redimensionado arrastando a
 divisória e expandido para ocupar a janela. **Reduzir** restaura o painel lateral,
 preservando o texto em edição.
 
+A versão **1.3.0** acrescenta um painel redimensionável, acessível pela barra lateral:
+
+- **Tarefas em segundo plano:** até quatro comandos simultâneos, com saída, estado,
+  cancelamento e histórico local. As conversas em execução também aparecem no painel.
+  A IA pode iniciar e consultar tarefas pelas ferramentas, respeitando as aprovações.
+- **Navegador:** Qt WebEngine (Chromium) com JavaScript, barra de endereço,
+  voltar/avançar, recarregar e abertura externa. Permite testar sites em `localhost`.
+  O perfil é temporário e o navegador só carrega ao abrir essa aba.
+- **Terminal:** sessão Bash/PTY no Linux, iniciada na pasta do projeto, com entrada
+  interativa, Ctrl+C, saída copiável e controles ANSI filtrados. É um transcript
+  linear; não substitui um emulador completo para programas como `vim` e `htop`.
+
+Recolher o painel e trocar de conversa mantém os processos. **Sair do aplicativo
+ou encerrar a sessão encerra as tarefas locais.** Não é um serviço do sistema.
+O navegador visual é de uso manual; a ferramenta `browse_url` do agente continua
+consultando páginas pelo navegador externo em modo sem janela.
+
+| Tarefas | Navegador | Terminal |
+|---|---|---|
+| ![Tarefas](docs/images/tarefas-segundo-plano.png) | ![Navegador](docs/images/navegador-integrado.png) | ![Terminal](docs/images/terminal-integrado.png) |
+
 Na versão **1.2.2**, a revisão genérica introduzida na 1.2.1 foi removida.
 Tentativas de chamadas DSML recebidas como texto são identificadas e têm até
 dois pedidos de reenvio no protocolo correto; o aplicativo não executa comandos
@@ -135,7 +156,7 @@ docs/                     documentação (arquitetura, API, ferramentas)
 
 ## Requisitos
 
-- **Qt 6.11+** (Core, Gui, Widgets, Quick, Qml, Network, Multimedia, TextToSpeech, Svg, Pdf)
+- **Qt 6.11+** (Core, Gui, Widgets, Quick, Qml, Network, Multimedia, TextToSpeech, Svg, Pdf, WebEngineQuick)
 - Compilador C++17 (MinGW 64 ou MSVC; gcc/clang no Linux/macOS)
 - Servidor com **PHP 8+**, MariaDB/MySQL e um site HTTPS para o backend
 

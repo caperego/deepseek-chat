@@ -238,6 +238,12 @@ private slots:
             declared << value.toObject().value("function").toObject().value("name").toString();
         for (const char *name : {"browser_open", "browser_read", "browser_click", "browser_type", "browser_back"})
             QVERIFY2(declared.contains(name), name);
+        // The PHP backend turns an empty "properties" object into [], which the provider rejects.
+        for (const QJsonValue &value : api.requests.first().value("tools").toArray()) {
+            const QJsonObject function = value.toObject().value("function").toObject();
+            QVERIFY2(!function.value("parameters").toObject().value("properties").toObject().isEmpty(),
+                     qPrintable(function.value("name").toString()));
+        }
         QVERIFY(api.requests.first().value("messages").toArray().first().toObject()
                     .value("content").toString().contains("Sistema operacional"));
     }

@@ -5468,9 +5468,12 @@ QJsonArray AppController::toolDefinitions()
         QJsonObject{{"url", stringProp(QStringLiteral("URL http(s)."))},
                     {"new_tab", boolProp(QStringLiteral("Abrir em uma nova aba."))}},
         QJsonArray{QStringLiteral("url")}));
+    // Every tool declares at least one property: the backend decodes JSON into PHP
+    // arrays, and an empty "properties" object would reach the provider as [].
     tools.append(makeTool(QStringLiteral("browser_read"),
         QStringLiteral("Lê a página atual do navegador integrado: título, URL, texto, links e campos."),
-        QJsonObject{}, QJsonArray()));
+        QJsonObject{{"max_chars", intProp(QStringLiteral("Máximo de caracteres do texto (padrão 20000)."))}},
+        QJsonArray()));
     tools.append(makeTool(QStringLiteral("browser_click"),
         QStringLiteral("Clica em um link ou botão da página atual do navegador integrado, pelo texto visível "
                        "ou por um seletor CSS retornado em fields, e retorna a página resultante."),
@@ -5485,7 +5488,9 @@ QJsonArray AppController::toolDefinitions()
                     {"submit", boolProp(QStringLiteral("Enviar o formulário depois de digitar."))}},
         QJsonArray{QStringLiteral("selector"), QStringLiteral("text")}));
     tools.append(makeTool(QStringLiteral("browser_back"),
-        QStringLiteral("Volta para a página anterior no navegador integrado."), QJsonObject{}, QJsonArray()));
+        QStringLiteral("Volta para páginas anteriores no navegador integrado."),
+        QJsonObject{{"steps", intProp(QStringLiteral("Quantas páginas voltar (padrão 1)."))}},
+        QJsonArray()));
 
     QJsonObject restoreProps;
     restoreProps.insert(QStringLiteral("path"), stringProp(QStringLiteral(

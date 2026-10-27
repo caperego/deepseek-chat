@@ -643,7 +643,12 @@ private:
     bool m_pollingAutomations = false;
     QHash<QPair<QString, int>, AgentRun *> m_mcpCallRuns;
     QHash<QPair<QString, int>, QString> m_mcpCallTools;
-    QHash<int, QPair<AgentRun *, QString>> m_browserCalls;
+    struct BrowserCall {
+        AgentRun *run = nullptr;
+        QString tool;
+        int maxChars = 20000;
+    };
+    QHash<int, BrowserCall> m_browserCalls;
     int m_browserCallId = 0;
 
     Project m_activeProject;

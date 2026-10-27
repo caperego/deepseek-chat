@@ -133,7 +133,10 @@ QVariantMap AppController::agentBrowserRequestFor(const QString &tool, const QJs
                                                             args.value(QStringLiteral("submit")).toBool()));
         *detail = selector;
     } else if (tool == QLatin1String("browser_back")) {
-        request.insert(QStringLiteral("back"), true);
+        request.insert(QStringLiteral("back"), qBound(1, args.value(QStringLiteral("steps")).toInt(1), 20));
+    } else if (tool == QLatin1String("browser_read")) {
+        const int maxChars = args.value(QStringLiteral("max_chars")).toInt(kPageTextLimit);
+        request.insert(QStringLiteral("maxChars"), qBound(1000, maxChars, 100000));
     }
     return request;
 }
@@ -152,7 +155,7 @@ void AppController::agentBrowserCall(AgentRun *run, const ToolCall &call)
     }
 
     const int id = ++m_browserCallId;
-    m_browserCalls.insert(id, {run, call.name});
+    m_browserCalls.insert(id, {run, call.name, request.value(QStringLiteral("maxChars"), kPageTextLimit).toInt()});
     if (displayingRun(run))
         m_messages->updateLastTool(QStringLiteral("⚙ %1: %2…").arg(call.name,
             detail.isEmpty() ? QStringLiteral("navegador integrado") : detail), QString());
@@ -166,30 +169,30 @@ void AppController::agentBrowserCall(AgentRun *run, const ToolCall &call)
 void AppController::agentBrowserReply(int requestId, const QVariantMap &reply)
 {
     emit agentBrowserReplied(requestId, reply);
-    const auto pending = m_browserCalls.take(requestId);
-    AgentRun *run = pending.first;
+    const BrowserCall pending = m_browserCalls.take(requestId);
+    AgentRun *run = pending.run;
     if (!run || !m_runs.contains(run) || run->aborted)
         return;
 
     QJsonObject result = QJsonObject::fromVariantMap(reply);
     QString content = result.value(QStringLiteral("content")).toString();
-    if (content.size() > kPageTextLimit) {
-        content = content.left(kPageTextLimit) + QStringLiteral("\n[texto truncado]");
+    if (content.size() > pending.maxChars) {
+        content = content.left(pending.maxChars) + QStringLiteral("\n[texto truncado]");
         result.insert(QStringLiteral("content"), content);
     }
     const QString title = result.value(QStringLiteral("title")).toString();
     const QString errorText = result.value(QStringLiteral("error")).toString();
     const QString summary = errorText.isEmpty()
-        ? QStringLiteral("⚙ %1: %2").arg(pending.second,
+        ? QStringLiteral("⚙ %1: %2").arg(pending.tool,
               title.isEmpty() ? result.value(QStringLiteral("url")).toString() : title)
-        : QStringLiteral("⚙ %1: %2").arg(pending.second, errorText);
+        : QStringLiteral("⚙ %1: %2").arg(pending.tool, errorText);
     finishToolCall(run, QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)), summary);
 }
 
 void AppController::dropBrowserCallsFor(AgentRun *run)
 {
     for (auto it = m_browserCalls.begin(); it != m_browserCalls.end();) {
-        if (it.value().first == run) it = m_browserCalls.erase(it);
+        if (it.value().run == run) it = m_browserCalls.erase(it);
         else ++it;
     }
 }

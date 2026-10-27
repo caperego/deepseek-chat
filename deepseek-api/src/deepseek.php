@@ -249,7 +249,20 @@ function deepseek_chat_stream(Db $db, array $config, array $user, array $body): 
         $payload['effort'] = $effort;
     }
     if (isset($body['tools']) && is_array($body['tools']) && $body['tools'] !== []) {
-        $payload['tools'] = $body['tools'];
+        $tools = $body['tools'];
+        // json_decode(..., true) turns an empty JSON object into [], which the
+        // provider rejects as a parameter schema; restore it as an object.
+        foreach ($tools as &$tool) {
+            if (isset($tool['function']['parameters']) && is_array($tool['function']['parameters'])) {
+                $parameters = &$tool['function']['parameters'];
+                if (!isset($parameters['properties']) || $parameters['properties'] === []) {
+                    $parameters['properties'] = new stdClass();
+                }
+                unset($parameters);
+            }
+        }
+        unset($tool);
+        $payload['tools'] = $tools;
         $payload['tool_choice'] = $body['tool_choice'] ?? 'auto';
     }
 

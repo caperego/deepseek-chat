@@ -135,8 +135,9 @@ ColumnLayout {
             // Chromium hides entries reached by script clicks from goBack() (history
             // intervention); history.back() still returns to them.
             var before = view.url.toString()
-            if (view.canGoBack) view.goBack()
-            else view.runJavaScript("history.back()")
+            var steps = Math.max(1, Number(request.back) || 1)
+            if (steps === 1 && view.canGoBack) view.goBack()
+            else view.runJavaScript("history.go(-" + steps + ")")
             whenSettled(view, function() { reply({ went_back: view.url.toString() !== before }) })
         } else if (request.script) {
             view.runJavaScript(request.script, function(result) { reply(result) })

@@ -50,8 +50,9 @@ if errorlevel 1 (
     if errorlevel 1 exit /b 1
 )
 
-if not exist build mkdir build
-cd build
+rem Pasta separada da build/ do Linux: o .qmake.stash do GCC quebra o qmake do MSVC.
+if not exist build-windows mkdir build-windows
+cd build-windows
 
 echo ==^> qmake
 qmake ..\deepseek-chat.pro -spec win32-msvc "CONFIG+=release" "CONFIG-=debug_and_release"

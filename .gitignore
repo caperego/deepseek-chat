@@ -12,6 +12,7 @@ connect-rdp.sh
 
 # Artefatos de build e distribuição
 deepseek-chat/build/
+deepseek-chat/build-windows/
 deepseek-chat/bin/
 deepseek-chat/dist/
 deepseek-chat/*.zip

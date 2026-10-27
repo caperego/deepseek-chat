@@ -1,8 +1,10 @@
 TEMPLATE = app
 TARGET = deepseek-chat
 DESTDIR = $$PWD/bin
-OBJECTS_DIR = $$PWD/build/obj
-MOC_DIR = $$PWD/build/moc
+# Inside the build folder, so Linux (build/) and Windows (build-windows/) builds
+# never share objects or the qmake stash.
+OBJECTS_DIR = $$OUT_PWD/obj
+MOC_DIR = $$OUT_PWD/moc
 
 include(app-sources.pri)
 

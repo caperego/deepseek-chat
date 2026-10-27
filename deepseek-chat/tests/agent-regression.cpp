@@ -205,6 +205,56 @@ private slots:
         QVERIFY(controller.m_backgroundTasks.first()->process);
         controller.stopBackgroundTask(controller.m_backgroundTasks.firstKey());
     }
+    void agentBrowserToolsDriveTheVisiblePanel() {
+        MockApi api;
+        api.response = [&api](const QJsonObject &) {
+            return api.requests.size() == 1
+                ? tool("browser_open", {{"url", "https://example.invalid/"}})
+                : answer("Página aberta no navegador integrado.");
+        };
+        Config::instance().api().baseUrl = api.url();
+        const QString previousMode = Config::instance().ui().permissionMode;
+        Config::instance().ui().permissionMode = "full";
+        AppController controller; controller.setCurrentModel("deepseek-flash");
+        QVariantMap seen;
+        // Stands in for BrowserPane.qml, which runs the scripts in the real browser.
+        connect(&controller, &AppController::agentBrowserRequest, &controller, [&](int id, const QVariantMap &request) {
+            seen = request;
+            QTimer::singleShot(0, &controller, [&controller, id] {
+                controller.agentBrowserReply(id, {{"url", "https://example.invalid/"}, {"title", "Exemplo"},
+                                                  {"content", "Conteúdo visível da página"}, {"links", QVariantList{}}});
+            });
+        });
+        controller.send("Abra o site e navegue por ele");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.streaming(), 5000);
+        Config::instance().ui().permissionMode = previousMode;
+        QCOMPARE(seen.value("url").toString(), QString("https://example.invalid/"));
+        QVERIFY(seen.value("snapshot").toString().contains("innerText"));
+        QCOMPARE(api.requests.size(), 2);
+        const QJsonArray messages = api.requests.at(1).value("messages").toArray();
+        QVERIFY(messages.last().toObject().value("content").toString().contains("Conteúdo visível da página"));
+        QStringList declared;
+        for (const QJsonValue &value : api.requests.first().value("tools").toArray())
+            declared << value.toObject().value("function").toObject().value("name").toString();
+        for (const char *name : {"browser_open", "browser_read", "browser_click", "browser_type", "browser_back"})
+            QVERIFY2(declared.contains(name), name);
+        QVERIFY(api.requests.first().value("messages").toArray().first().toObject()
+                    .value("content").toString().contains("Sistema operacional"));
+    }
+    void agentBrowserActionsNeedApprovalButReadingDoesNot() {
+        AppController controller;
+        AgentRun run; run.permissionMode = "ask"; run.workdir = QDir::tempPath();
+        auto needsApproval = [&](const char *name, const QJsonObject &arguments) {
+            ToolCall c; c.name = name;
+            c.arguments = QString::fromUtf8(QJsonDocument(arguments).toJson(QJsonDocument::Compact));
+            return controller.toolNeedsApproval(&run, c, nullptr);
+        };
+        QVERIFY(needsApproval("browser_open", {{"url", "https://example.invalid"}}));
+        QVERIFY(needsApproval("browser_click", {{"text", "Entrar"}}));
+        QVERIFY(needsApproval("browser_type", {{"selector", "#q"}, {"text", "x"}}));
+        QVERIFY(!needsApproval("browser_read", {}));
+        QVERIFY(!needsApproval("browser_back", {}));
+    }
     void dangerousBackgroundToolStillRequiresApproval() {
         MockApi api; api.response = [](const QJsonObject &) {
             return tool("start_background_task", {{"command", "shutdown --help"}});
@@ -516,6 +566,8 @@ for line in sys.stdin:
         QTest::newRow("same-line") << QString("Vou procurar. <｜DSML｜tool_calls>");
         QTest::newRow("ascii") << QString("<|DSML|function_calls>");
         QTest::newRow("spaced-invoke") << QString("<｜DSML｜ invoke name=\"read_file\">");
+        QTest::newRow("doubled-bars") << QString("<｜｜DSML｜｜calls>\n<｜｜DSML｜｜invoke name=\"run_command\">");
+        QTest::newRow("spaced-bars") << QString("< | | DSML | | calls>");
     }
     void leakedToolTextIsReissuedAsNativeCall() {
         QFETCH(QString, marker);

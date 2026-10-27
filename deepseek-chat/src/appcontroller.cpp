@@ -49,6 +49,7 @@
 #include <QSharedPointer>
 #include <QSocketNotifier>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QTextToSpeech>
 #include <QTimer>
@@ -1825,6 +1826,7 @@ void AppController::destroyRun(AgentRun *run)
         return;
 
     removeApprovalsFor(run);
+    dropBrowserCallsFor(run);
     if (!run->automationId.isEmpty()) {
         m_automations.complete(run->automationId, QStringLiteral("Cancelada"), run->conversationId);
         emit automationsChanged();
@@ -2489,6 +2491,10 @@ void AppController::performToolCall(AgentRun *run, const ToolCall &call)
         browseUrl(run, call);
         return;
     }
+    if (isAgentBrowserTool(call.name)) {
+        agentBrowserCall(run, call);
+        return;
+    }
     if (call.name == QLatin1String("search_web")) {
         searchWeb(run, call);
         return;
@@ -2525,7 +2531,9 @@ void AppController::finishToolCall(AgentRun *run, const QString &result,
                                    const QString &summary)
 {
     if (run->currentTool.name == QLatin1String("fetch_url")
-        || run->currentTool.name == QLatin1String("browse_url")) {
+        || run->currentTool.name == QLatin1String("browse_url")
+        || run->currentTool.name == QLatin1String("browser_open")
+        || run->currentTool.name == QLatin1String("browser_read")) {
         const QJsonObject page = QJsonDocument::fromJson(result.toUtf8()).object();
         const QString url = page.value(QStringLiteral("url")).toString();
         const QString content = page.value(QStringLiteral("content")).toString().simplified();
@@ -4102,7 +4110,12 @@ QString AppController::agentContextText() const
         "uma linha no formato ![descrição](caminho_do_arquivo) — o aplicativo mostra a "
         "imagem inline; use caminho relativo à pasta do projeto ou absoluto. "
         "Quando a mensagem do usuário citar um link (URL), use fetch_url ou browse_url "
-        "para ler o conteúdo da página antes de responder.");
+        "para ler o conteúdo da página antes de responder. "
+        "Quando o usuário pedir para abrir, mostrar ou navegar em um site, use o navegador "
+        "integrado do aplicativo: browser_open, browser_read, browser_click, browser_type e "
+        "browser_back. Ele já está disponível e visível ao usuário; não procure navegadores "
+        "nem ambiente gráfico com run_command.");
+    context += QStringLiteral("\nSistema operacional: %1.").arg(QSysInfo::prettyProductName());
     context += QStringLiteral("\nPasta de trabalho: %1")
                    .arg(m_activeProject.workdir.isEmpty()
                             ? QStringLiteral("(não definida)")
@@ -4171,6 +4184,12 @@ bool AppController::toolNeedsApproval(const AgentRun *run, const ToolCall &call,
 
     if (call.name.startsWith(QLatin1String("mcp__")))
         return true;
+
+    // Opening, clicking and typing act on the user's visible browser (and its
+    // logins); reading the current page or going back does not.
+    if (isAgentBrowserTool(call.name))
+        return call.name != QLatin1String("browser_read")
+            && call.name != QLatin1String("browser_back");
 
     QString error;
     const QJsonObject args = parseArguments(call, &error);
@@ -5203,6 +5222,12 @@ QString AppController::toolApprovalTitle(const ToolCall &call)
         || call.name == QLatin1String("browse_url")
         || call.name == QLatin1String("search_web"))
         return QStringLiteral("A IA quer acessar a internet");
+    if (call.name == QLatin1String("browser_open"))
+        return QStringLiteral("A IA quer abrir uma página no navegador integrado");
+    if (call.name == QLatin1String("browser_click"))
+        return QStringLiteral("A IA quer clicar na página do navegador integrado");
+    if (call.name == QLatin1String("browser_type"))
+        return QStringLiteral("A IA quer preencher um campo no navegador integrado");
     if (call.name == QLatin1String("download_file"))
         return QStringLiteral("A IA quer baixar um arquivo");
     if (call.name == QLatin1String("run_command")) {
@@ -5235,8 +5260,19 @@ QString AppController::toolApprovalDetail(const AgentRun *run, const ToolCall &c
         return QStringLiteral("Pesquisa: %1")
             .arg(args.value(QStringLiteral("query")).toString());
     if (call.name == QLatin1String("fetch_url")
-        || call.name == QLatin1String("browse_url"))
+        || call.name == QLatin1String("browse_url")
+        || call.name == QLatin1String("browser_open"))
         return QStringLiteral("URL: %1").arg(args.value(QStringLiteral("url")).toString());
+    if (call.name == QLatin1String("browser_click")) {
+        const QString text = args.value(QStringLiteral("text")).toString();
+        return text.isEmpty() ? QStringLiteral("Elemento: %1").arg(args.value(QStringLiteral("selector")).toString())
+                              : QStringLiteral("Clicar em: %1").arg(text);
+    }
+    if (call.name == QLatin1String("browser_type"))
+        return QStringLiteral("Campo: %1\nTexto: %2%3")
+            .arg(args.value(QStringLiteral("selector")).toString(),
+                 args.value(QStringLiteral("text")).toString(),
+                 args.value(QStringLiteral("submit")).toBool() ? QStringLiteral("\n(enviar o formulário)") : QString());
 
     if (call.name == QLatin1String("download_file")) {
         QString detail = QStringLiteral("URL: %1")
@@ -5424,6 +5460,32 @@ QJsonArray AppController::toolDefinitions()
                                          "(JavaScript) e retorna o texto; se não houver "
                                          "navegador, baixa como fetch_url."),
                           browseProps, QJsonArray{QStringLiteral("url")}));
+
+    tools.append(makeTool(QStringLiteral("browser_open"),
+        QStringLiteral("Abre uma URL no navegador integrado do aplicativo, visível ao usuário no painel "
+                       "lateral, e retorna título, texto, links e campos da página. Use quando o usuário "
+                       "pedir para abrir, ver ou navegar em um site."),
+        QJsonObject{{"url", stringProp(QStringLiteral("URL http(s)."))},
+                    {"new_tab", boolProp(QStringLiteral("Abrir em uma nova aba."))}},
+        QJsonArray{QStringLiteral("url")}));
+    tools.append(makeTool(QStringLiteral("browser_read"),
+        QStringLiteral("Lê a página atual do navegador integrado: título, URL, texto, links e campos."),
+        QJsonObject{}, QJsonArray()));
+    tools.append(makeTool(QStringLiteral("browser_click"),
+        QStringLiteral("Clica em um link ou botão da página atual do navegador integrado, pelo texto visível "
+                       "ou por um seletor CSS retornado em fields, e retorna a página resultante."),
+        QJsonObject{{"text", stringProp(QStringLiteral("Texto visível do link ou botão."))},
+                    {"selector", stringProp(QStringLiteral("Seletor CSS do elemento (opcional)."))}},
+        QJsonArray()));
+    tools.append(makeTool(QStringLiteral("browser_type"),
+        QStringLiteral("Preenche um campo da página atual do navegador integrado e, se submit for true, "
+                       "envia o formulário. Nunca digite senhas ou dados de pagamento."),
+        QJsonObject{{"selector", stringProp(QStringLiteral("Seletor CSS do campo, de fields."))},
+                    {"text", stringProp(QStringLiteral("Texto a digitar."))},
+                    {"submit", boolProp(QStringLiteral("Enviar o formulário depois de digitar."))}},
+        QJsonArray{QStringLiteral("selector"), QStringLiteral("text")}));
+    tools.append(makeTool(QStringLiteral("browser_back"),
+        QStringLiteral("Volta para a página anterior no navegador integrado."), QJsonObject{}, QJsonArray()));
 
     QJsonObject restoreProps;
     restoreProps.insert(QStringLiteral("path"), stringProp(QStringLiteral(

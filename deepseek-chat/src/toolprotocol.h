@@ -8,8 +8,10 @@ namespace ToolProtocol {
 // This is diagnostic only: never interpret or execute commands from this text.
 inline int leakedCallStart(const QString &text)
 {
+    // Providers vary the delimiters: one or more ASCII/fullwidth bars, with or
+    // without spaces (<｜DSML｜calls>, <｜｜DSML｜｜calls>, < | | DSML | | calls>).
     static const QRegularExpression tag(QStringLiteral(
-        R"(<(?:｜|\|)DSML(?:｜|\|)\s*(?:function_calls|tool_calls|calls|invoke)(?=\s|>))"));
+        R"(<\s*(?:[｜|]\s*)+DSML\s*(?:[｜|]\s*)+(?:function_calls|tool_calls|calls|invoke)(?=\s|>))"));
     bool fenced = false;
     QString fence;
     int offset = 0;

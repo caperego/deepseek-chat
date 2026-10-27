@@ -40,6 +40,17 @@ Rectangle {
         else pendingUrl = url
     }
     function browser() { return browserLoader.item }
+    property var pendingAgentRequests: []
+    function agentRequest(id, request) {
+        selectTab(tabBrowser)
+        if (browserLoader.item) {
+            browserLoader.item.agentRequest(id, request)
+        } else {
+            var queued = pendingAgentRequests.slice()
+            queued.push({ id: id, request: request })
+            pendingAgentRequests = queued
+        }
+    }
     function setArtifactText(text) { artifactView.text = text }
     function appendTerminal(text) {
         pendingTerminalText += text
@@ -268,6 +279,10 @@ Rectangle {
                         item.openUrl(panel.pendingUrl)
                         panel.pendingUrl = ""
                     }
+                    var queued = panel.pendingAgentRequests
+                    panel.pendingAgentRequests = []
+                    for (var i = 0; i < queued.length; ++i)
+                        item.agentRequest(queued[i].id, queued[i].request)
                 }
             }
 

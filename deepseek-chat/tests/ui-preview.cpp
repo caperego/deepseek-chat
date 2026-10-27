@@ -17,6 +17,8 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QJSValue>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 // Render the actual application resources using fictional data only.
 // Never load the developer's config, account, MCP processes, or remote API.
@@ -140,8 +142,12 @@ int main(int argc, char **argv) {
                 while (server.hasPendingConnections()) {
                     auto *socket = server.nextPendingConnection();
                     QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket] {
-                        socket->readAll();
-                        const QByteArray body = "<html><head><title>Preview local OK</title></head><body style='font-family:sans-serif;padding:32px'><h1>Previa do projeto</h1><button id='check' onclick=\"document.title='Interacao OK'\">Testar interacao</button></body></html>";
+                        const bool second = socket->readAll().startsWith("GET /pagina2");
+                        const QByteArray body = second
+                            ? QByteArray("<html><head><title>Pagina 2</title></head><body><p>SEGUNDA_PAGINA</p></body></html>")
+                            : QByteArray("<html><head><title>Preview local OK</title></head><body style='font-family:sans-serif;padding:32px'><h1>Previa do projeto</h1>"
+                                         "<button id='check' onclick=\"document.title='Interacao OK'\">Testar interacao</button>"
+                                         "<p><input id='busca' name='q' placeholder='Buscar'></p><p><a href='/pagina2'>Próxima página</a></p></body></html>");
                         socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
                         socket->disconnectFromHost();
                     });
@@ -176,11 +182,40 @@ int main(int argc, char **argv) {
             for (int i = 0; i < 30 && web->property("title").toString() != "Interacao OK"; ++i) QTest::qWait(100);
             if (!check(web->property("title").toString() == "Interacao OK", "JavaScript não interagiu com a página")) return;
             save(QStringLiteral("navegador-integrado"));
+            // Agent tools run their real scripts in Chromium: read, type, click a link, go back.
+            QHash<int, QVariantMap> replies;
+            QObject::connect(&app, &AppController::agentBrowserReplied, &app,
+                             [&replies](int id, const QVariantMap &reply) { replies.insert(id, reply); });
+            auto agent = [&](int id, const char *tool, const QJsonObject &args) {
+                QString error, detail;
+                const QVariantMap request = AppController::agentBrowserRequestFor(QString::fromLatin1(tool), args, &error, &detail);
+                QMetaObject::invokeMethod(browser, "agentRequest", Q_ARG(QVariant, id), Q_ARG(QVariant, request));
+                for (int i = 0; i < 150 && !replies.contains(id); ++i) QTest::qWait(100);
+                return replies.value(id);
+            };
+            const QVariantMap read = agent(901, "browser_read", {});
+            const QString readLinks = QString::fromUtf8(QJsonDocument::fromVariant(read.value("links")).toJson());
+            const QString readFields = QString::fromUtf8(QJsonDocument::fromVariant(read.value("fields")).toJson());
+            if (!check(read.value("content").toString().contains("Previa do projeto") && readLinks.contains("/pagina2")
+                       && readFields.contains("#busca"), "browser_read não leu texto, links e campos")) return;
+            const QVariantMap typed = agent(902, "browser_type", {{"selector", "#busca"}, {"text", "ola"}});
+            if (!check(typed.value("action").toMap().value("typed").toBool(), "browser_type não preencheu o campo")) return;
+            const QVariantMap clicked = agent(903, "browser_click", {{"text", "Próxima página"}});
+            if (!check(clicked.value("url").toString().endsWith("/pagina2")
+                       && clicked.value("content").toString().contains("SEGUNDA_PAGINA"), "browser_click não navegou")) return;
+            const QVariantMap back = agent(904, "browser_back", {});
+            // The page may come back from the cache with the title the earlier click set.
+            if (back.value("url").toString() != url || !back.value("content").toString().contains("Previa do projeto")) {
+                std::fprintf(stderr, "browser_back não voltou (url=%s, ação=%s)\n", qPrintable(back.value("url").toString()),
+                             QJsonDocument::fromVariant(back.value("action")).toJson(QJsonDocument::Compact).constData());
+                QCoreApplication::exit(1);
+                return;
+            }
             QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 0));
             QTest::qWait(150);
             save(QStringLiteral("tarefas-segundo-plano"));
             app.stopBackgroundTask(id);
-            std::fprintf(stdout, "Workspace: tarefa em segundo plano, terminal PTY, HTTP local e JavaScript verificados.\n");
+            std::fprintf(stdout, "Workspace: tarefa em segundo plano, terminal PTY, HTTP local, JavaScript e ferramentas do agente no navegador verificados.\n");
             QCoreApplication::exit(0);
         });
         return application.exec();

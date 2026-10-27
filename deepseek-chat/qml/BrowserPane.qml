@@ -98,6 +98,71 @@ ColumnLayout {
         default: return "usar um recurso do sistema"
         }
     }
+    // Agent requests: navigate or run a script, wait until the page settles,
+    // then reply with a snapshot of the visible page.
+    property var settleWaiters: []
+    function whenSettled(view, callback) {
+        var now = Date.now()
+        var waiters = settleWaiters.slice()
+        waiters.push({ view: view, callback: callback, earliest: now + 400, deadline: now + 20000 })
+        settleWaiters = waiters
+        settleTimer.start()
+    }
+    function agentRequest(id, request) {
+        if (request.newTab || !current) newTab("")
+        var view = current
+        if (!view) {
+            app.agentBrowserReply(id, { error: "O navegador integrado não está disponível." })
+            return
+        }
+        var reply = function(action) {
+            whenSettled(view, function() {
+                view.runJavaScript(request.snapshot, function(snapshot) {
+                    var result = snapshot || {}
+                    result.url = view.url.toString()
+                    result.title = view.title
+                    if (action !== undefined && action !== null) result.action = action
+                    if (pane.loadError.length > 0) result.load_error = pane.loadError
+                    app.agentBrowserReply(id, result)
+                })
+            })
+        }
+        if (request.url) {
+            loadError = ""
+            view.url = request.url
+            reply(null)
+        } else if (request.back) {
+            // Chromium hides entries reached by script clicks from goBack() (history
+            // intervention); history.back() still returns to them.
+            var before = view.url.toString()
+            if (view.canGoBack) view.goBack()
+            else view.runJavaScript("history.back()")
+            whenSettled(view, function() { reply({ went_back: view.url.toString() !== before }) })
+        } else if (request.script) {
+            view.runJavaScript(request.script, function(result) { reply(result) })
+        } else {
+            reply(null)
+        }
+    }
+    Timer {
+        id: settleTimer
+        interval: 200
+        repeat: true
+        onTriggered: {
+            var now = Date.now()
+            var pending = []
+            var ready = []
+            for (var i = 0; i < pane.settleWaiters.length; ++i) {
+                var waiter = pane.settleWaiters[i]
+                if (now > waiter.deadline || (now >= waiter.earliest && !waiter.view.loading)) ready.push(waiter)
+                else pending.push(waiter)
+            }
+            pane.settleWaiters = pending
+            if (pending.length === 0) stop()
+            for (var j = 0; j < ready.length; ++j) ready[j].callback()
+        }
+    }
+
     function handleDownload(download) {
         download.downloadDirectory = app.downloadsDirectory()
         download.accept()

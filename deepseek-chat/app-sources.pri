@@ -19,6 +19,7 @@ SOURCES += \
     $$PWD/src/backgroundtasks.cpp \
     $$PWD/src/terminal.cpp \
     $$PWD/src/workspace.cpp \
+    $$PWD/src/agentbrowser.cpp \
     $$PWD/src/config.cpp \
     $$PWD/src/theme.cpp \
     $$PWD/src/assets.cpp \

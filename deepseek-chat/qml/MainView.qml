@@ -471,6 +471,12 @@ RowLayout {
             }
         }
 
+        function onAgentBrowserRequest(id, request) {
+            if (!main.workspaceOpen) main.openedForArtifact = false
+            main.workspaceOpen = true
+            workspace.agentRequest(id, request)
+        }
+
         function onBrowserRequested(url) {
             if (!main.workspaceOpen) main.openedForArtifact = false
             main.workspaceOpen = true

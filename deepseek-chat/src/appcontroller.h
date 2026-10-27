@@ -397,6 +397,10 @@ public:
     Q_INVOKABLE void sendTerminalInput(const QString &text);
     Q_INVOKABLE void killTerminal();
     Q_INVOKABLE void interruptTerminal();
+    Q_INVOKABLE void agentBrowserReply(int requestId, const QVariantMap &reply);
+    // Request (scripts and navigation) that BrowserPane.qml runs for a browser_* tool.
+    static QVariantMap agentBrowserRequestFor(const QString &tool, const QJsonObject &args,
+                                              QString *error, QString *detail);
     Q_INVOKABLE QString gitStatusText();
     Q_INVOKABLE void exportCurrentConversation();
     Q_INVOKABLE void checkForUpdates();
@@ -460,6 +464,8 @@ signals:
     void updateStatusChanged();
     void balanceChanged();
     void browserRequested(const QString &url);
+    void agentBrowserRequest(int requestId, const QVariantMap &request);
+    void agentBrowserReplied(int requestId, const QVariantMap &reply);
 
 private:
     void afterLogin(const User &user);
@@ -512,6 +518,9 @@ private:
     void searchWeb(AgentRun *run, const ToolCall &call);
     void downloadFile(AgentRun *run, const ToolCall &call);
     void runCommand(AgentRun *run, const ToolCall &call);
+    static bool isAgentBrowserTool(const QString &name);
+    void agentBrowserCall(AgentRun *run, const ToolCall &call);
+    void dropBrowserCallsFor(AgentRun *run);
     void maybeQueueNext(qint64 conversationId);
     void maybeGenerateTitle(qint64 conversationId, const QString &model,
                             const QString &effort);
@@ -634,6 +643,8 @@ private:
     bool m_pollingAutomations = false;
     QHash<QPair<QString, int>, AgentRun *> m_mcpCallRuns;
     QHash<QPair<QString, int>, QString> m_mcpCallTools;
+    QHash<int, QPair<AgentRun *, QString>> m_browserCalls;
+    int m_browserCallId = 0;
 
     Project m_activeProject;
     qint64 m_activeProjectId = 0;

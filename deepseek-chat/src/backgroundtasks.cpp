@@ -3,11 +3,66 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QTimer>
-#ifndef Q_OS_WIN
+#ifdef Q_OS_WIN
+#include <windows.h>
+#else
 #include <signal.h>
 #include <unistd.h>
 #endif
+
+namespace {
+
+// Development servers announce their address; offer it as a browser preview.
+QString detectPreviewUrl(const QByteArray &output)
+{
+    static const QRegularExpression pattern(QStringLiteral(
+        "https?://(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\]):\\d{2,5}[^\\s\"'<>\\x1b]*"));
+    const auto match = pattern.match(QString::fromUtf8(output));
+    if (!match.hasMatch()) return {};
+    QString url = match.captured(0);
+    url.replace(QStringLiteral("0.0.0.0"), QStringLiteral("localhost"));
+    while (url.endsWith(QLatin1Char('.')) || url.endsWith(QLatin1Char(',')) || url.endsWith(QLatin1Char(')')))
+        url.chop(1);
+    return url;
+}
+
+#ifdef Q_OS_WIN
+// cmd.exe exits before the servers it launches; a Job Object lets us end the tree.
+void *attachJob(qint64 pid)
+{
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (!job) return nullptr;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+    HANDLE process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, DWORD(pid));
+    const bool assigned = process && AssignProcessToJobObject(job, process);
+    if (process) CloseHandle(process);
+    if (!assigned) { CloseHandle(job); return nullptr; }
+    return job;
+}
+
+void closeJob(BackgroundTask *task)
+{
+    if (!task->job) return;
+    TerminateJobObject(static_cast<HANDLE>(task->job), 1);
+    CloseHandle(static_cast<HANDLE>(task->job));
+    task->job = nullptr;
+}
+#endif
+
+void killTree(BackgroundTask *task)
+{
+#ifdef Q_OS_WIN
+    closeJob(task);
+#else
+    if (task->pid > 0) ::kill(-task->pid, SIGKILL);
+#endif
+}
+
+} // namespace
 
 QVariantList AppController::backgroundTasks() const
 {
@@ -16,6 +71,7 @@ QVariantList AppController::backgroundTasks() const
         items.prepend(QVariantMap{{"id", task->id}, {"command", task->command},
             {"workdir", task->workdir}, {"status", task->status},
             {"running", task->process != nullptr}, {"exitCode", task->exitCode},
+            {"previewUrl", task->previewUrl}, {"revision", task->revision},
             {"projectId", task->projectId}, {"conversationId", task->conversationId}});
     }
     return items;
@@ -31,6 +87,18 @@ int AppController::startBackgroundTask(const QString &command)
 {
     return launchBackgroundTask(command, m_activeProject.workdir,
                                 m_activeProjectId, m_currentConversationId);
+}
+
+int AppController::restartBackgroundTask(int id)
+{
+    const auto *task = m_backgroundTasks.value(id);
+    if (!task) return 0;
+    const QString command = task->command;
+    const QString workdir = task->workdir;
+    const qint64 projectId = task->projectId;
+    const qint64 conversationId = task->conversationId;
+    if (task->process) stopBackgroundTask(id);
+    return launchBackgroundTask(command, workdir, projectId, conversationId);
 }
 
 int AppController::launchBackgroundTask(const QString &command, const QString &workdir,
@@ -60,7 +128,14 @@ int AppController::launchBackgroundTask(const QString &command, const QString &w
 #endif
     m_backgroundTasks.insert(task->id, task);
     connect(process, &QProcess::readyReadStandardOutput, this, [this, task, process] {
-        task->output.append(process->readAllStandardOutput());
+        const QByteArray chunk = process->readAllStandardOutput();
+        task->output.append(chunk);
+        ++task->revision;
+        if (task->previewUrl.isEmpty()) {
+            task->previewUrl = detectPreviewUrl(chunk);
+            if (!task->previewUrl.isEmpty())
+                emit toast(QStringLiteral("Prévia disponível: %1").arg(task->previewUrl));
+        }
         if (!m_backgroundUpdatePending) {
             m_backgroundUpdatePending = true;
             QTimer::singleShot(100, this, [this] {
@@ -71,16 +146,18 @@ int AppController::launchBackgroundTask(const QString &command, const QString &w
     });
     connect(process, &QProcess::started, this, [this, task, process] {
         task->pid = process->processId();
+#ifdef Q_OS_WIN
+        task->job = attachJob(task->pid);
+#endif
         task->status = QStringLiteral("Em execução");
         emit backgroundTasksChanged();
     });
     auto done = [this, task, process](int code, bool failed) {
         if (task->process != process) return;
         task->output.append(process->readAllStandardOutput());
+        ++task->revision;
         // A command that exits must not leave an orphan server/child behind.
-#ifndef Q_OS_WIN
-        if (task->pid > 0) ::kill(-task->pid, SIGKILL);
-#endif
+        killTree(task);
         task->exitCode = code;
         task->status = task->stopped ? QStringLiteral("Cancelada")
             : failed ? QStringLiteral("Falhou") : QStringLiteral("Concluída");
@@ -114,9 +191,7 @@ void AppController::stopBackgroundTask(int id)
     task->stopped = true;
     task->status = QStringLiteral("Cancelando");
     emit backgroundTasksChanged();
-#ifndef Q_OS_WIN
-    if (task->pid > 0) ::kill(-task->pid, SIGKILL);
-#endif
+    killTree(task);
     task->process->kill();
 }
 
@@ -135,13 +210,14 @@ void AppController::shutdownBackgroundTasks()
         if (task->process) {
             auto *process = task->process;
             QObject::disconnect(process, nullptr, this, nullptr);
-#ifndef Q_OS_WIN
-            if (task->pid > 0) ::kill(-task->pid, SIGKILL);
-#endif
+            killTree(task);
             process->kill();
             process->waitForFinished(1000);
             delete process;
         }
+#ifdef Q_OS_WIN
+        closeJob(task);
+#endif
         delete task;
     }
     m_backgroundTasks.clear();

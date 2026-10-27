@@ -33,6 +33,14 @@
         <file>resources/icons/plugin.svg</file>
         <file>resources/icons/clock.svg</file>
         <file>resources/icons/terminal.svg</file>
+        <file>resources/icons/arrow-left.svg</file>
+        <file>resources/icons/arrow-right.svg</file>
+        <file>resources/icons/arrow-down.svg</file>
+        <file>resources/icons/tasks.svg</file>
+        <file>resources/icons/activity.svg</file>
+        <file>resources/icons/shield.svg</file>
+        <file>resources/icons/download.svg</file>
+        <file>resources/icons/panel.svg</file>
         <file>qml/main.qml</file>
         <file>qml/AppButton.qml</file>
         <file>qml/AppTextField.qml</file>
@@ -50,6 +58,7 @@
         <file>qml/MainView.qml</file>
         <file>qml/WorkspaceTools.qml</file>
         <file>qml/BrowserPane.qml</file>
+        <file>qml/ArtifactView.qml</file>
         <file>qml/Sidebar.qml</file>
         <file>qml/ChatView.qml</file>
         <file>qml/MessageDelegate.qml</file>

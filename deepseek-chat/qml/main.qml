@@ -71,9 +71,10 @@ ApplicationWindow {
         height: toastLabel.implicitHeight + 22
         radius: 10
         color: theme.dark ? "#3a3a3a" : "#111827"
+        // Top of the window, so it never covers the composer buttons.
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 30
+        anchors.top: parent.top
+        anchors.topMargin: 74
         opacity: 0
         visible: opacity > 0.01
         z: 1000

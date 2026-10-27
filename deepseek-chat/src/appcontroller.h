@@ -31,6 +31,7 @@ class QWindow;
 class QTimer;
 class QMenu;
 class QPixmap;
+class QImage;
 
 class MessageListModel : public QAbstractListModel {
     Q_OBJECT
@@ -214,6 +215,8 @@ class AppController : public QObject {
     Q_PROPERTY(QVariantList artifactVersions READ artifactVersions NOTIFY artifactChanged)
     Q_PROPERTY(QString updateStatus READ updateStatus NOTIFY updateStatusChanged)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateStatusChanged)
+    Q_PROPERTY(bool openLinksInternally READ openLinksInternally WRITE setOpenLinksInternally NOTIFY uiSettingsChanged)
+    Q_PROPERTY(bool browserPersistent READ browserPersistent WRITE setBrowserPersistent NOTIFY uiSettingsChanged)
 
 public:
     explicit AppController(QObject *parent = nullptr);
@@ -286,6 +289,7 @@ public:
     QVariantList backgroundTasks() const;
     QVariantList activeRuns() const;
     Q_INVOKABLE int startBackgroundTask(const QString &command);
+    Q_INVOKABLE int restartBackgroundTask(int id);
     Q_INVOKABLE QString backgroundTaskOutput(int id) const;
     Q_INVOKABLE void stopBackgroundTask(int id);
     Q_INVOKABLE void clearFinishedTasks();
@@ -297,6 +301,10 @@ public:
     QVariantList artifactVersions() const { return m_artifactVersions; }
     QString updateStatus() const { return m_updateStatus; }
     bool updateAvailable() const { return m_updateAvailable; }
+    bool openLinksInternally() const;
+    void setOpenLinksInternally(bool enabled);
+    bool browserPersistent() const;
+    void setBrowserPersistent(bool enabled);
 
     Q_INVOKABLE void tryAutoLogin();
     Q_INVOKABLE void login(const QString &username, const QString &password);
@@ -372,6 +380,15 @@ public:
     Q_INVOKABLE void copyToClipboard(const QString &text);
     Q_INVOKABLE void attachUrl(const QString &url);
     Q_INVOKABLE void openExternal(const QString &url);
+    Q_INVOKABLE void openLink(const QString &url);
+    Q_INVOKABLE QString displayPath(const QString &path) const;
+    Q_INVOKABLE QString downloadsDirectory() const;
+    Q_INVOKABLE bool attachPath(const QString &path);
+    Q_INVOKABLE void attachImage(const QImage &image);
+    Q_INVOKABLE void attachPageText(const QString &title, const QString &url, const QString &text);
+    Q_INVOKABLE void setPermissionMode(const QString &mode);
+    Q_INVOKABLE void openProjectFolder(qint64 id);
+    Q_INVOKABLE void renameProject(qint64 id, const QString &name);
     Q_INVOKABLE void regenerateLast();
     Q_INVOKABLE void editMessage(qint64 messageId, const QString &newText);
     Q_INVOKABLE void searchMessages(const QString &query);
@@ -379,6 +396,7 @@ public:
     Q_INVOKABLE void runTerminalCommand(const QString &command);
     Q_INVOKABLE void sendTerminalInput(const QString &text);
     Q_INVOKABLE void killTerminal();
+    Q_INVOKABLE void interruptTerminal();
     Q_INVOKABLE QString gitStatusText();
     Q_INVOKABLE void exportCurrentConversation();
     Q_INVOKABLE void checkForUpdates();
@@ -441,6 +459,7 @@ signals:
     void artifactChanged();
     void updateStatusChanged();
     void balanceChanged();
+    void browserRequested(const QString &url);
 
 private:
     void afterLogin(const User &user);

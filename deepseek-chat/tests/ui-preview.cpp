@@ -112,15 +112,24 @@ int main(int argc, char **argv) {
             if (!check(main && tools, "Painel de ferramentas ausente")) return;
             QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 0));
             QTest::qWait(150);
+#ifdef Q_OS_WIN
+            const int id = app.startBackgroundTask("echo TASK_VISIBLE& ping -n 31 127.0.0.1 >nul");
+#else
             const int id = app.startBackgroundTask("printf TASK_VISIBLE; sleep 30");
+#endif
             tools->setProperty("selectedTask", id);
-            QTest::qWait(250);
+            for (int i = 0; i < 30 && !app.backgroundTaskOutput(id).contains("TASK_VISIBLE"); ++i) QTest::qWait(100);
             if (!check(app.backgroundTaskOutput(id).contains("TASK_VISIBLE"), "Tarefa não iniciou")) return;
             main->setProperty("workspaceOpen", false);
             QTest::qWait(100);
             if (!check(app.backgroundTasks().first().toMap().value("running").toBool(), "Recolher parou a tarefa")) return;
             QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 2));
+#ifdef Q_OS_WIN
+            // The caret keeps the typed command from matching the expected output.
+            app.runTerminalCommand("echo TERMINAL^_VISIVEL");
+#else
             app.runTerminalCommand("printf '%s_%s\\n' TERMINAL VISIVEL");
+#endif
             for (int i = 0; i < 30 && !tools->property("terminalText").toString().contains("TERMINAL_VISIVEL"); ++i) QTest::qWait(100);
             if (!check(tools->property("terminalText").toString().contains("TERMINAL_VISIVEL"), "Terminal não mostrou saída")) return;
             save(QStringLiteral("terminal-integrado"));
@@ -141,10 +150,23 @@ int main(int argc, char **argv) {
             });
             QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 1));
             main->setProperty("workspaceExpanded", true);
-            QTest::qWait(400);
-            auto *browser = window->findChild<QObject *>(QStringLiteral("browserPane"));
-            auto *web = window->findChild<QObject *>(QStringLiteral("workspaceWebView"));
-            if (!check(browser && web, "Navegador não carregou")) return;
+            QObject *browser = nullptr;
+            QObject *web = nullptr;
+            // Chromium starts on first use; give slower machines time to create the view.
+            for (int i = 0; i < 100 && !(browser && web); ++i) {
+                QTest::qWait(100);
+                browser = window->findChild<QObject *>(QStringLiteral("browserPane"));
+                // Tabs come from a Repeater, outside the QObject tree findChild walks.
+                web = browser ? browser->property("current").value<QObject *>() : nullptr;
+            }
+            if (!browser || !web) {
+                auto *loader = window->findChild<QObject *>(QStringLiteral("browserLoader"));
+                std::fprintf(stderr, "Navegador não carregou (loader=%d ativo=%d status=%d painel=%d página=%d)\n",
+                             loader != nullptr, loader && loader->property("active").toBool(),
+                             loader ? loader->property("status").toInt() : -1, browser != nullptr, web != nullptr);
+                QCoreApplication::exit(1);
+                return;
+            }
             const QString url = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
             QMetaObject::invokeMethod(browser, "navigate", Q_ARG(QVariant, url));
             for (int i = 0; i < 100 && web->property("title").toString() != "Preview local OK"; ++i) QTest::qWait(100);

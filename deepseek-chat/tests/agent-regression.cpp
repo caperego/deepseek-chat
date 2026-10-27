@@ -84,6 +84,31 @@ static QByteArray tool(const QString &name, const QJsonObject &args, int number 
         + delta({{"tool_calls", QJsonArray{call}}}, "tool_calls") + "data: [DONE]\n\n";
 }
 
+// The same scenario written for the platform shell: /bin/sh or cmd.exe.
+static QString shell(const char *posix, const char *windows) {
+#ifdef Q_OS_WIN
+    Q_UNUSED(posix);
+    return QString::fromUtf8(windows);
+#else
+    Q_UNUSED(windows);
+    return QString::fromUtf8(posix);
+#endif
+}
+
+// On Windows "python3" may be the Microsoft Store alias, which never runs a
+// script; use the first interpreter that actually executes code.
+static QString workingPython() {
+    for (const char *name : {"python3", "python", "py"}) {
+        const QString path = QStandardPaths::findExecutable(QString::fromLatin1(name));
+        if (path.isEmpty()) continue;
+        QProcess probe;
+        probe.start(path, {"-c", "import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)"});
+        if (probe.waitForFinished(5000) && probe.exitStatus() == QProcess::NormalExit && probe.exitCode() == 0)
+            return path;
+    }
+    return {};
+}
+
 class AgentRegression : public QObject {
     Q_OBJECT
 private slots:
@@ -96,53 +121,75 @@ private slots:
         QString decoded;
         for (int i = 0; i < encoded.size(); ++i) decoded += text.consume(encoded.mid(i, 1));
         QCOMPARE(decoded, QString("Ação"));
+        // Cursor positioning (as ConPTY emits) separates lines; at a line start it adds nothing.
+        TerminalText conpty;
+        QCOMPARE(conpty.consume("\x1b[H\x1b[2JMicrosoft\x1b[2;1HC:\\>"), QString("Microsoft\nC:\\>"));
     }
     void backgroundTasksPreserveCwdOutputAndExitStatus() {
-#ifndef Q_OS_WIN
         QTemporaryDir dir;
         AppController controller; controller.m_activeProject.workdir = dir.path();
-        const int id = controller.startBackgroundTask("pwd; printf TASK_OK; exit 7");
+        const int id = controller.startBackgroundTask(shell("pwd; printf TASK_OK; exit 7", "cd& echo TASK_OK& exit /b 7"));
         QVERIFY(id > 0);
-        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 5000);
         QCOMPARE(controller.m_backgroundTasks.value(id)->exitCode, 7);
         QCOMPARE(controller.m_backgroundTasks.value(id)->status, QString("Falhou"));
-        QVERIFY(controller.backgroundTaskOutput(id).contains(dir.path()));
+        QVERIFY(controller.backgroundTaskOutput(id).contains(QDir::toNativeSeparators(dir.path())));
         QVERIFY(controller.backgroundTaskOutput(id).contains("TASK_OK"));
         controller.clearFinishedTasks(); QVERIFY(controller.backgroundTasks().isEmpty());
-#endif
+    }
+    void backgroundTasksDetectPreviewUrlAndRestart() {
+        AppController controller;
+        const int id = controller.startBackgroundTask("echo Local: http://localhost:5173/");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 5000);
+        QCOMPARE(controller.m_backgroundTasks.value(id)->previewUrl, QString("http://localhost:5173/"));
+        QCOMPARE(controller.backgroundTasks().first().toMap().value("previewUrl").toString(), QString("http://localhost:5173/"));
+        const int again = controller.restartBackgroundTask(id);
+        QVERIFY(again > id);
+        QCOMPARE(controller.m_backgroundTasks.value(again)->command, controller.m_backgroundTasks.value(id)->command);
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(again)->process, 5000);
+    }
+    void linksOpenInTheIntegratedBrowserAndPathsAreRelative() {
+        QTemporaryDir dir;
+        AppController controller; controller.m_activeProject.workdir = dir.path();
+        Config::instance().ui().openLinksInternally = true;
+        QSignalSpy browser(&controller, &AppController::browserRequested);
+        controller.openLink("https://example.invalid/docs");
+        QCOMPARE(browser.size(), 1);
+        QCOMPARE(browser.first().first().toString(), QString("https://example.invalid/docs"));
+        QCOMPARE(controller.displayPath(dir.path() + "/src/main.cpp"),
+                 QDir::toNativeSeparators(QStringLiteral("src/main.cpp")));
+        QCOMPARE(controller.displayPath(dir.path()), QStringLiteral("."));
     }
     void backgroundTasksRunIndependentlyAndCanBeCancelled() {
-#ifndef Q_OS_WIN
         AppController controller;
-        const int id = controller.startBackgroundTask("printf STARTED; sleep 30");
+        const int id = controller.startBackgroundTask(shell("printf STARTED; sleep 30", "echo STARTED& ping -n 31 127.0.0.1 >nul"));
         QTRY_VERIFY_WITH_TIMEOUT(controller.backgroundTaskOutput(id).contains("STARTED"), 3000);
         controller.m_currentConversationId = 123;
         QVERIFY(controller.m_backgroundTasks.value(id)->process);
         controller.clearFinishedTasks(); QCOMPARE(controller.backgroundTasks().size(), 1);
         controller.stopBackgroundTask(id);
-        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 5000);
         QCOMPARE(controller.m_backgroundTasks.value(id)->status, QString("Cancelada"));
-#endif
     }
     void backgroundTasksBoundConcurrencyAndOutput() {
-#ifndef Q_OS_WIN
         AppController controller;
-        for (int i = 0; i < 4; ++i) QVERIFY(controller.startBackgroundTask("sleep 30") > 0);
+        const QString wait = shell("sleep 30", "ping -n 31 127.0.0.1 >nul");
+        for (int i = 0; i < 4; ++i) QVERIFY(controller.startBackgroundTask(wait) > 0);
         QCOMPARE(controller.startBackgroundTask("echo must-not-start"), 0);
         controller.shutdownBackgroundTasks(); QVERIFY(controller.backgroundTasks().isEmpty());
-        const int id = controller.startBackgroundTask("head -c 400000 /dev/zero; printf THE_END");
-        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 3000);
+        const int id = controller.startBackgroundTask(shell("head -c 400000 /dev/zero; printf THE_END",
+            "(for /L %i in (1,1,9000) do @echo 01234567890123456789012345678901234567890123456789)& echo THE_END"));
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.m_backgroundTasks.value(id)->process, 20000);
         QVERIFY(controller.backgroundTaskOutput(id).size() < 206000);
         QVERIFY(controller.backgroundTaskOutput(id).contains("THE_END"));
         QVERIFY(controller.m_backgroundTasks.value(id)->output.truncated());
-#endif
     }
     void backgroundToolDoesNotBlockChatAndHonorsApproval() {
-#ifndef Q_OS_WIN
         MockApi api;
-        api.response = [&api](const QJsonObject &) {
+        const QString command = shell("printf READY; sleep 30", "echo READY& ping -n 31 127.0.0.1 >nul");
+        api.response = [&api, command](const QJsonObject &) {
             return api.requests.size() == 1
-                ? tool("start_background_task", {{"command", "printf READY; sleep 30"}})
+                ? tool("start_background_task", {{"command", command}})
                 : answer("Tarefa iniciada, ainda em execução.");
         };
         Config::instance().api().baseUrl = api.url();
@@ -157,7 +204,6 @@ private slots:
         QCOMPARE(controller.backgroundTasks().size(), 1);
         QVERIFY(controller.m_backgroundTasks.first()->process);
         controller.stopBackgroundTask(controller.m_backgroundTasks.firstKey());
-#endif
     }
     void dangerousBackgroundToolStillRequiresApproval() {
         MockApi api; api.response = [](const QJsonObject &) {
@@ -293,7 +339,7 @@ private slots:
     }
     void mcpServersIsolateResponsesAndHandleFailures() {
         QFETCH(QString, mode);
-        const auto python = QStandardPaths::findExecutable("python3");
+        const auto python = workingPython();
         if (python.isEmpty()) QSKIP("Python 3 is required for the isolated MCP test server");
         MockApi api;
         QTemporaryDir dir;

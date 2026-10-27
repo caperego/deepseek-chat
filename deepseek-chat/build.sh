@@ -11,7 +11,7 @@ if [ -z "${QMAKE:-}" ]; then
         QMAKE=qmake
     else
         echo "Erro: qmake/qmake6 não encontrado no PATH." >&2
-        echo "Linux: sudo pacman -S qt6-base qt6-declarative qt6-multimedia qt6-speech qt6-svg" >&2
+        echo "Linux: sudo pacman -S qt6-base qt6-declarative qt6-multimedia qt6-speech qt6-svg qt6-webengine" >&2
         echo "macOS: brew install qt" >&2
         exit 1
     fi

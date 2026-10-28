@@ -539,7 +539,7 @@ Item {
                                                                 Number(link.substring(10))))
                         return
                     }
-                    app.openExternal(link)
+                    app.openLink(link)
                 }
 
             }
@@ -600,7 +600,7 @@ Item {
                     AppButton {
                         text: (modelData.title || modelData.url) + " ↗"
                         ghost: true
-                        onClicked: app.openExternal(modelData.url)
+                        onClicked: app.openLink(modelData.url)
                     }
                     Text {
                         Layout.fillWidth: true

@@ -8,68 +8,94 @@ RowLayout {
     spacing: 0
     property int navigationWidth: app.sidebarWidth
     property bool navigationCollapsed: app.sidebarCollapsed
+    // Side panel (file, browser, terminal, tasks) beside the conversation.
     property bool workspaceOpen: false
     property bool workspaceExpanded: false
-    property real workspaceHeight: 360
+    property bool openedForArtifact: false
+    property real artifactWidth: 460
+    readonly property bool artifactExpanded: workspaceExpanded
+    readonly property real artifactMaximumWidth: Math.max(280,
+        main.width - (navigation.visible ? navigation.width + 6 : 52) - 420)
+
     function openWorkspace(tab) {
-        artifactExpanded = false
-        if (app.artifactVisible) workspaceExpanded = true
+        if (!workspaceOpen) openedForArtifact = false
         workspaceOpen = true
         workspace.selectTab(tab)
     }
-    property real artifactWidth: 460
-    property bool artifactExpanded: false
-    readonly property real artifactMaximumWidth: Math.max(280,
-        main.width - (navigation.visible ? navigation.width + 6 : 52) - 288)
-
-    function toggleArtifactExpanded() {
-        artifactExpanded = !artifactExpanded
+    function toggleWorkspace() {
+        if (workspaceOpen) {
+            workspaceOpen = false
+            workspaceExpanded = false
+        } else {
+            openWorkspace(workspace.currentTab)
+        }
     }
-
+    function toggleArtifactExpanded() {
+        workspaceExpanded = !workspaceExpanded
+    }
     function toggleNavigation() {
         navigationCollapsed = !navigationCollapsed
         app.saveNavigationLayout(navigationWidth, navigationCollapsed)
     }
+    function openBrowserAddress() {
+        openWorkspace(workspace.tabBrowser)
+        Qt.callLater(function() { if (workspace.browser()) workspace.browser().focusAddress() })
+    }
+    function findAnywhere() {
+        var browser = workspace.browser()
+        if (workspaceOpen && workspace.currentTab === workspace.tabBrowser && browser) {
+            browser.showFind()
+            return
+        }
+        if (navigationCollapsed) toggleNavigation()
+        navigation.focusSearch()
+    }
+    function conversationIds() {
+        var ids = []
+        var entries = app.sidebar
+        for (var i = 0; i < entries.length; ++i)
+            if (entries[i].type === "conv") ids.push(entries[i].id)
+        return ids
+    }
+    function cycleConversation(step) {
+        var ids = conversationIds()
+        if (ids.length === 0) return
+        var index = ids.indexOf(app.currentConversationId)
+        index = index < 0 ? 0 : (index + step + ids.length) % ids.length
+        app.openConversation(ids[index])
+    }
+
+    component RailButton: AppButton {
+        property string hint
+        Layout.fillWidth: true
+        ghost: true
+        ToolTip.text: hint
+        ToolTip.visible: hovered
+        Accessible.name: hint
+    }
 
     Rectangle {
-        visible: main.navigationCollapsed && !main.artifactExpanded
+        visible: main.navigationCollapsed && !main.workspaceExpanded
         Layout.preferredWidth: 52
         Layout.fillHeight: true
         color: theme.sidebar
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 6
-            AppButton {
-                text: "☰"
-                Layout.fillWidth: true
-                ghost: true
-                ToolTip.text: "Mostrar projetos e conversas"
-                ToolTip.visible: hovered
-                onClicked: main.toggleNavigation()
-            }
-            AppButton {
-                text: "+"
-                Layout.fillWidth: true
-                ghost: true
-                ToolTip.text: "Nova conversa"
-                ToolTip.visible: hovered
-                onClicked: app.newConversation(app.activeProjectId)
-            }
+            spacing: 4
+            RailButton { icon.source: "qrc:/resources/icons/list.svg"; hint: "Mostrar projetos e conversas (Ctrl+B)"; onClicked: main.toggleNavigation() }
+            RailButton { icon.source: "qrc:/resources/icons/plus.svg"; hint: "Nova conversa (Ctrl+N)"; onClicked: app.newConversation(app.activeProjectId) }
+            RailButton { icon.source: "qrc:/resources/icons/globe.svg"; hint: "Navegador (Ctrl+L)"; onClicked: main.openWorkspace(workspace.tabBrowser) }
+            RailButton { icon.source: "qrc:/resources/icons/terminal.svg"; hint: "Terminal (Ctrl+`)"; onClicked: main.openWorkspace(workspace.tabTerminal) }
+            RailButton { icon.source: "qrc:/resources/icons/tasks.svg"; hint: "Tarefas em segundo plano"; onClicked: main.openWorkspace(workspace.tabTasks) }
             Item { Layout.fillHeight: true }
-            AppButton {
-                icon.source: "qrc:/resources/icons/gear.svg"
-                Layout.fillWidth: true
-                ghost: true
-                ToolTip.text: "Configurações"
-                ToolTip.visible: hovered
-                onClicked: navigation.openSettings()
-            }
+            RailButton { icon.source: "qrc:/resources/icons/gear.svg"; hint: "Configurações (Ctrl+,)"; onClicked: navigation.openSettings() }
         }
     }
 
     Sidebar {
         id: navigation
-        visible: !main.navigationCollapsed && !main.artifactExpanded
+        visible: !main.navigationCollapsed && !main.workspaceExpanded
         Layout.preferredWidth: Math.min(main.navigationWidth, Math.max(220, main.width * 0.38))
         Layout.fillHeight: true
         onCollapseRequested: main.toggleNavigation()
@@ -77,7 +103,7 @@ RowLayout {
     }
 
     Rectangle {
-        visible: !main.navigationCollapsed && !main.artifactExpanded
+        visible: !main.navigationCollapsed && !main.workspaceExpanded
         Layout.preferredWidth: 6
         Layout.fillHeight: true
         color: resizeMouse.containsMouse || resizeMouse.pressed ? theme.selected : theme.bg
@@ -105,52 +131,22 @@ RowLayout {
         }
     }
 
-    ColumnLayout {
+    StackLayout {
         objectName: "conversationPane"
-        visible: !main.artifactExpanded
+        visible: !main.workspaceExpanded
         Layout.fillWidth: true
         Layout.fillHeight: true
-        spacing: 0
-        StackLayout {
-            visible: !main.workspaceOpen || !main.workspaceExpanded
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            currentIndex: app.viewMode
-            ChatView {}
-            ProjectView {}
+        currentIndex: app.viewMode
+        ChatView {
+            id: chat
+            onWorkspaceRequested: function(tab) { main.openWorkspace(tab) }
         }
-        Rectangle {
-            visible: main.workspaceOpen && !main.workspaceExpanded
-            Layout.fillWidth: true
-            Layout.preferredHeight: 8
-            color: theme.border
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.SizeVerCursor
-                property real startY: 0
-                property real startHeight: 0
-                onPressed: function(event) { startY = mapToItem(main, event.x, event.y).y; startHeight = workspace.height }
-                onPositionChanged: function(event) {
-                    if (pressed) main.workspaceHeight = Math.max(240, Math.min(main.height - 240,
-                        startHeight + startY - mapToItem(main, event.x, event.y).y))
-                }
-            }
-        }
-        WorkspaceTools {
-            id: workspace
-            visible: main.workspaceOpen
-            Layout.fillWidth: true
-            Layout.fillHeight: main.workspaceExpanded
-            Layout.preferredHeight: Math.min(main.workspaceHeight, main.height * 0.55)
-            expanded: main.workspaceExpanded
-            onCloseRequested: main.workspaceOpen = false
-            onExpandRequested: main.workspaceExpanded = !main.workspaceExpanded
-        }
+        ProjectView {}
     }
 
     Rectangle {
         objectName: "artifactResizeHandle"
-        visible: app.artifactVisible && !main.artifactExpanded && !(main.workspaceOpen && main.workspaceExpanded)
+        visible: main.workspaceOpen && !main.workspaceExpanded
         Layout.preferredWidth: 8
         Layout.fillHeight: true
         color: artifactResizeMouse.containsMouse || artifactResizeMouse.pressed ? theme.selected : theme.bg
@@ -183,193 +179,20 @@ RowLayout {
         }
     }
 
-    Rectangle {
+    Item {
         id: artifactPanel
         objectName: "artifactPanel"
-        Layout.preferredWidth: main.artifactExpanded ? main.width
+        visible: main.workspaceOpen
+        Layout.preferredWidth: main.workspaceExpanded ? main.width
             : Math.min(main.artifactWidth, main.artifactMaximumWidth)
-        Layout.fillWidth: main.artifactExpanded
+        Layout.fillWidth: main.workspaceExpanded
         Layout.fillHeight: true
-        visible: app.artifactVisible && !(main.workspaceOpen && main.workspaceExpanded)
-        color: theme.bg
-
-        Rectangle {
-            width: 1
-            height: parent.height
-            anchors.left: parent.left
-            color: theme.border
-        }
-
-        ColumnLayout {
+        WorkspaceTools {
+            id: workspace
             anchors.fill: parent
-            anchors.margins: 10
-            spacing: 8
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-
-                Text {
-                    Layout.fillWidth: true
-                    text: app.artifactPath
-                    color: theme.text
-                    font.bold: true
-                    elide: Text.ElideMiddle
-                }
-
-                AppButton {
-                    objectName: "expandArtifactButton"
-                    text: main.artifactExpanded ? "Reduzir" : "Expandir"
-                    ghost: true
-                    ToolTip.visible: hovered
-                    ToolTip.text: main.artifactExpanded ? "Voltar ao painel lateral" : "Usar toda a janela para ver o arquivo"
-                    onClicked: main.toggleArtifactExpanded()
-                }
-
-                AppButton {
-                    icon.source: "qrc:/resources/icons/close.svg"
-                    ghost: true
-                    ToolTip.text: "Fechar arquivo"
-                    ToolTip.visible: hovered
-                    onClicked: app.closeArtifact()
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-
-                AppButton {
-                    text: artifactPanel.width < 420 ? "" : "Copiar"
-                    ToolTip.text: "Copiar arquivo"
-                    ToolTip.visible: hovered
-                    icon.source: "qrc:/resources/icons/copy.svg"
-                    ghost: true
-                    onClicked: app.copyToClipboard(artifactArea.text)
-                }
-
-                AppButton {
-                    text: artifactPanel.width < 420 ? "" : "Abrir"
-                    ToolTip.text: "Abrir no aplicativo padrão"
-                    ToolTip.visible: hovered
-                    icon.source: "qrc:/resources/icons/open.svg"
-                    ghost: true
-                    onClicked: app.openPath(app.artifactPath)
-                }
-
-                AppButton {
-                    text: artifactPanel.width < 420 ? "" : "Salvar"
-                    ToolTip.text: "Salvar arquivo"
-                    ToolTip.visible: hovered
-                    icon.source: "qrc:/resources/icons/save.svg"
-                    primary: true
-                    onClicked: app.saveArtifact(artifactArea.text)
-                }
-
-                Item { Layout.fillWidth: true }
-            }
-
-            AppTabBar {
-                id: artifactTabs
-                Layout.fillWidth: true
-                AppTabButton { text: "Editar" }
-                AppTabButton { text: "Prévia" }
-                AppTabButton { text: "Alterações" }
-                AppTabButton { text: "Versões" }
-            }
-
-            StackLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                currentIndex: artifactTabs.currentIndex
-
-                ScrollView {
-                    CopyableTextArea {
-                        id: artifactArea
-                        objectName: "artifactEditor"
-                        wrapMode: TextArea.NoWrap
-                        font.family: "Consolas"
-                        font.pointSize: theme.codeFontSize
-                        color: theme.text
-                    }
-                }
-
-                Item {
-                    id: previewPane
-                    readonly property bool svg: /\.svg$/i.test(app.artifactPath)
-                    readonly property bool markdown: /\.(md|markdown)$/i.test(app.artifactPath)
-                    readonly property bool html: /\.(html|htm)$/i.test(app.artifactPath)
-
-                    Image {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        visible: parent.svg
-                        source: parent.svg && artifactTabs.currentIndex === 1
-                                ? app.artifactPreviewUrl(artifactArea.text) : ""
-                        fillMode: Image.PreserveAspectFit
-                        asynchronous: true
-                    }
-
-                    ScrollView {
-                        anchors.fill: parent
-                        visible: !parent.svg
-                        CopyableTextEdit {
-                            width: parent.width
-                            readOnly: true
-                            selectByMouse: true
-                            wrapMode: TextEdit.Wrap
-                            textFormat: previewPane.markdown ? TextEdit.MarkdownText
-                                        : (previewPane.html ? TextEdit.RichText
-                                           : TextEdit.PlainText)
-                            text: artifactTabs.currentIndex === 1 ? artifactArea.text : ""
-                            color: theme.text
-                            font.pointSize: theme.chatFontSize
-                            font.family: theme.chatFontFamily
-                            onLinkActivated: function(link) { app.openExternal(link) }
-                        }
-                    }
-                }
-
-                ScrollView {
-                    CopyableTextArea {
-                        text: artifactTabs.currentIndex === 2
-                              ? app.artifactDiff(artifactArea.text) : ""
-                        readOnly: true
-                        wrapMode: TextArea.NoWrap
-                        font.family: "Consolas"
-                        font.pointSize: theme.codeFontSize
-                        color: theme.text
-                    }
-                }
-
-                ScrollView {
-                    ColumnLayout {
-                        width: parent.width
-                        spacing: 8
-                        Text {
-                            text: app.artifactVersions.length > 0
-                                  ? "Versões anteriores deste arquivo" : "Nenhuma versão anterior."
-                            color: theme.muted
-                        }
-                        Repeater {
-                            model: app.artifactVersions
-                            delegate: RowLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                Text {
-                                    text: modelData.label
-                                    color: theme.text
-                                    Layout.fillWidth: true
-                                }
-                                AppButton {
-                                    text: "Restaurar"
-                                    onClicked: app.restoreArtifactVersion(modelData.path)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            expanded: main.workspaceExpanded
+            onCloseRequested: { main.workspaceOpen = false; main.workspaceExpanded = false }
+            onExpandRequested: main.toggleArtifactExpanded()
         }
     }
 
@@ -459,53 +282,85 @@ RowLayout {
         }
     }
 
-    Shortcut {
-        sequence: "Ctrl+K"
-        context: Qt.ApplicationShortcut
-        onActivated: commandPalette.openAndFocus()
-    }
+    // Keyboard shortcuts (Ctrl maps to the same keys on Windows and Linux).
+    Shortcut { sequence: "Ctrl+K"; context: Qt.ApplicationShortcut; onActivated: commandPalette.openAndFocus() }
+    Shortcut { sequence: "Ctrl+N"; onActivated: app.newConversation(app.activeProjectId) }
+    Shortcut { sequence: "Ctrl+B"; onActivated: main.toggleNavigation() }
+    Shortcut { sequence: "Ctrl+J"; onActivated: main.toggleWorkspace() }
+    Shortcut { sequence: "Ctrl+L"; onActivated: main.openBrowserAddress() }
+    Shortcut { sequence: "Ctrl+F"; onActivated: main.findAnywhere() }
+    Shortcut { sequence: "Ctrl+,"; onActivated: navigation.openSettings() }
+    Shortcut { sequence: "Ctrl+`"; onActivated: main.openWorkspace(workspace.tabTerminal) }
+    Shortcut { sequence: "Ctrl+Tab"; onActivated: main.cycleConversation(1) }
+    Shortcut { sequence: "Ctrl+Shift+Tab"; onActivated: main.cycleConversation(-1) }
+    Shortcut { sequence: "Ctrl+Backtab"; onActivated: main.cycleConversation(-1) }
 
     AppDialog {
         id: commandPalette
         parent: Overlay.overlay
         anchors.centerIn: parent
-        width: Math.min(620, main.width - 40)
-        height: Math.min(460, main.height - 80)
+        width: Math.min(640, main.width - 40)
+        height: Math.min(500, main.height - 80)
         modal: true
         title: "Comandos"
         padding: 12
 
         function actions() {
             return [
-                { title: "Nova conversa", hint: "Criar uma conversa no projeto atual",
+                { title: "Nova conversa", hint: "Criar uma conversa no projeto atual", keys: "Ctrl+N",
                   run: function() { app.newConversation(app.activeProjectId) } },
-                { title: "Novo projeto", hint: "Criar e organizar um novo projeto",
+                { title: "Novo projeto", hint: "Criar e organizar um novo projeto", keys: "",
                   run: function() { navigation.openNewProject() } },
-                { title: "Abrir configurações", hint: "Tema, modelo, áudio e preferências",
+                { title: "Buscar conversas", hint: "Pesquisar títulos e mensagens", keys: "Ctrl+F",
+                  run: function() { main.findAnywhere() } },
+                { title: "Mostrar ou ocultar a barra lateral", hint: "Projetos e conversas", keys: "Ctrl+B",
+                  run: function() { main.toggleNavigation() } },
+                { title: "Mostrar ou ocultar o painel lateral", hint: "Arquivo, navegador, terminal e tarefas", keys: "Ctrl+J",
+                  run: function() { main.toggleWorkspace() } },
+                { title: "Navegador", hint: "Abrir sites e prévias locais", keys: "Ctrl+L",
+                  run: function() { main.openBrowserAddress() } },
+                { title: "Abrir terminal", hint: "Executar comandos no projeto", keys: "Ctrl+`",
+                  run: function() { main.openWorkspace(workspace.tabTerminal) } },
+                { title: "Tarefas em segundo plano", hint: "Acompanhar comandos e conversas", keys: "",
+                  run: function() { main.openWorkspace(workspace.tabTasks) } },
+                { title: "Abrir configurações", hint: "Tema, modelo, áudio e preferências", keys: "Ctrl+,",
                   run: function() { navigation.openSettings() } },
-                { title: "Tarefas em segundo plano", hint: "Acompanhar comandos e conversas",
-                  run: function() { main.openWorkspace(0) } },
-                { title: "Navegador", hint: "Abrir sites e prévias locais",
-                  run: function() { main.openWorkspace(1) } },
-                { title: "Abrir terminal", hint: "Executar comandos no projeto",
-                  run: function() { navigation.openTerminal() } },
-                { title: "Atividades", hint: "Ver as ações recentes",
+                { title: "Plugins MCP", hint: "Servidores e ferramentas conectadas", keys: "",
+                  run: function() { navigation.openPlugins() } },
+                { title: "Automações", hint: "Tarefas agendadas", keys: "",
+                  run: function() { navigation.openAutomations() } },
+                { title: "Atividades", hint: "Ver as ações recentes", keys: "",
                   run: function() { navigation.openActivities() } },
-                { title: "Exportar conversa", hint: "Salvar a conversa atual em Markdown",
+                { title: "Exportar conversa", hint: "Salvar a conversa atual em Markdown", keys: "",
                   run: function() { app.exportCurrentConversation() } },
-                { title: "Abrir pasta do projeto", hint: "Mostrar os arquivos do projeto",
+                { title: "Abrir pasta do projeto", hint: "Mostrar os arquivos do projeto", keys: "",
                   run: function() { app.openWorkdir() } },
-                { title: "Atualizar custos", hint: "Consultar o uso atual da conversa",
-                  run: function() { app.refreshUsage(); app.refreshBalance() } }
+                { title: "Atualizar custos", hint: "Consultar o uso atual da conversa", keys: "",
+                  run: function() { app.refreshUsage(); app.refreshBalance() } },
+                { title: "Próxima conversa", hint: "Ir para a conversa seguinte da lista", keys: "Ctrl+Tab",
+                  run: function() { main.cycleConversation(1) } }
             ]
         }
 
         function filteredActions() {
             var query = commandSearch.text.trim().toLowerCase()
-            return actions().filter(function(action) {
+            var result = actions().filter(function(action) {
                 return query.length === 0 || action.title.toLowerCase().indexOf(query) >= 0
                     || action.hint.toLowerCase().indexOf(query) >= 0
             })
+            if (query.length > 0) {
+                var entries = app.sidebar
+                var found = 0
+                for (var i = 0; i < entries.length && found < 8; ++i) {
+                    var entry = entries[i]
+                    if (entry.type !== "conv" || !entry.title || entry.title.toLowerCase().indexOf(query) < 0)
+                        continue
+                    found++
+                    result.push({ title: entry.title, hint: "Ir para a conversa", keys: "",
+                                  run: (function(id) { return function() { app.openConversation(id) } })(entry.id) })
+                }
+            }
+            return result
         }
 
         function trigger(action) {
@@ -515,6 +370,8 @@ RowLayout {
 
         function openAndFocus() {
             commandSearch.text = ""
+            commandList.model = filteredActions()
+            commandList.currentIndex = 0
             open()
             commandSearch.forceActiveFocus()
         }
@@ -526,12 +383,24 @@ RowLayout {
             AppTextField {
                 id: commandSearch
                 Layout.fillWidth: true
-                placeholderText: "Digite um comando…"
-                onTextChanged: commandList.model = commandPalette.filteredActions()
+                placeholderText: "Digite um comando ou o nome de uma conversa…"
+                onTextChanged: {
+                    commandList.model = commandPalette.filteredActions()
+                    commandList.currentIndex = 0
+                }
                 onAccepted: {
-                    var choices = commandPalette.filteredActions()
+                    var choices = commandList.model
                     if (choices.length > 0)
-                        commandPalette.trigger(choices[0])
+                        commandPalette.trigger(choices[Math.max(0, commandList.currentIndex)])
+                }
+                Keys.onPressed: (event) => {
+                    if (event.key === Qt.Key_Down) {
+                        commandList.currentIndex = Math.min(commandList.count - 1, commandList.currentIndex + 1)
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Up) {
+                        commandList.currentIndex = Math.max(0, commandList.currentIndex - 1)
+                        event.accepted = true
+                    }
                 }
             }
 
@@ -540,15 +409,32 @@ RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                spacing: 4
-                model: commandPalette.filteredActions()
-
-                delegate: AppButton {
+                spacing: 2
+                model: []
+                highlightMoveDuration: 0
+                delegate: Rectangle {
                     required property var modelData
+                    required property int index
                     width: commandList.width
-                    text: modelData.title + "\n" + modelData.hint
-                    ghost: true
-                    onClicked: commandPalette.trigger(modelData)
+                    height: commandRow.implicitHeight + 14
+                    radius: 8
+                    color: index === commandList.currentIndex ? theme.selected
+                         : (commandHover.hovered ? theme.sidebar : "transparent")
+                    HoverHandler { id: commandHover }
+                    TapHandler { onTapped: commandPalette.trigger(modelData) }
+                    RowLayout {
+                        id: commandRow
+                        anchors.fill: parent
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 12
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+                            Text { Layout.fillWidth: true; text: modelData.title; color: theme.text; elide: Text.ElideRight }
+                            Text { Layout.fillWidth: true; text: modelData.hint; color: theme.muted; font.pointSize: Math.max(9, theme.fontSize - 2); elide: Text.ElideRight }
+                        }
+                        Text { visible: modelData.keys.length > 0; text: modelData.keys; color: theme.muted; font.pointSize: Math.max(9, theme.fontSize - 2) }
+                    }
                 }
             }
         }
@@ -569,10 +455,32 @@ RowLayout {
         }
 
         function onArtifactChanged() {
-            if (app.artifactVisible)
-                artifactArea.text = app.artifactContent
-            else
-                main.artifactExpanded = false
+            if (app.artifactVisible) {
+                workspace.setArtifactText(app.artifactContent)
+                if (!main.workspaceOpen) {
+                    main.workspaceOpen = true
+                    main.openedForArtifact = true
+                }
+                workspace.selectTab(workspace.tabFile)
+            } else if (main.openedForArtifact) {
+                main.workspaceOpen = false
+                main.workspaceExpanded = false
+                main.openedForArtifact = false
+            } else if (workspace.currentTab === workspace.tabFile) {
+                workspace.selectTab(workspace.tabTasks)
+            }
+        }
+
+        function onAgentBrowserRequest(id, request) {
+            if (!main.workspaceOpen) main.openedForArtifact = false
+            main.workspaceOpen = true
+            workspace.agentRequest(id, request)
+        }
+
+        function onBrowserRequested(url) {
+            if (!main.workspaceOpen) main.openedForArtifact = false
+            main.workspaceOpen = true
+            workspace.openUrl(url)
         }
     }
 }

@@ -1,50 +1,23 @@
-QT += core gui widgets network sql qml quick texttospeech multimedia pdf webenginequick
-
-CONFIG += c++17
 TEMPLATE = app
 TARGET = deepseek-chat
 DESTDIR = $$PWD/bin
-OBJECTS_DIR = $$PWD/build/obj
-MOC_DIR = $$PWD/build/moc
+# Inside the build folder, so Linux (build/) and Windows (build-windows/) builds
+# never share objects or the qmake stash.
+OBJECTS_DIR = $$OUT_PWD/obj
+MOC_DIR = $$OUT_PWD/moc
 
-RESOURCES += resources.qrc
+include(app-sources.pri)
+
+# Icon embedded in the .exe (Explorer, shortcuts, taskbar pins); the window icon
+# itself still comes from the PNGs at run time.
+win32 {
+    RC_ICONS = resources/deepseek.ico
+}
 
 macx {
     QMAKE_INFO_PLIST = mac/Info.plist
     QMAKE_MACOSX_DEPLOYMENT_TARGET = 11.0
 }
 
-win32 {
-    LIBS += -lcrypt32
-}
-
-unix:!macx {
-    LIBS += -lutil
-}
-
 SOURCES += \
-    src/main.cpp \
-    src/backgroundtasks.cpp \
-    src/config.cpp \
-    src/theme.cpp \
-    src/assets.cpp \
-    src/qmltheme.cpp \
-    src/apiclient.cpp \
-    src/streamclient.cpp \
-    src/appcontroller.cpp
-
-HEADERS += \
-    src/chattypes.h \
-    src/backgroundtasks.h \
-    src/terminaltext.h \
-    src/config.h \
-    src/pathpolicy.h \
-    src/toolprotocol.h \
-    src/boundedoutput.h \
-    src/automationstore.h \
-    src/theme.h \
-    src/assets.h \
-    src/qmltheme.h \
-    src/apiclient.h \
-    src/streamclient.h \
-    src/appcontroller.h
+    src/main.cpp

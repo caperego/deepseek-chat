@@ -13,7 +13,27 @@ Rectangle {
     function openSettings() { settingsDialog.open() }
     function openNewProject() { newProjectDialog.open() }
     function openTerminal() { workspaceRequested(2) }
-    function openActivities() { activitiesDialog.open() }
+    function openActivities() { app.refreshActivities(); activitiesDialog.open() }
+    function openPlugins() { settingsDialog.openPlugins() }
+    function openAutomations() { automationsDialog.open() }
+    function focusSearch() { search.forceActiveFocus(); search.selectAll() }
+    component ToolIcon: AppButton {
+        property string hint
+        Layout.fillWidth: true
+        implicitWidth: 34
+        leftPadding: 4
+        rightPadding: 4
+        ghost: true
+        ToolTip.text: hint
+        ToolTip.visible: hovered
+        Accessible.name: hint
+    }
+    readonly property bool hasConversations: {
+        var entries = app.sidebar
+        for (var i = 0; i < entries.length; ++i)
+            if (entries[i].type === "conv" || entries[i].type === "project") return true
+        return false
+    }
     function toggleProject(id) {
         var folded = Object.assign({}, collapsedProjects)
         folded[id] = !folded[id]
@@ -91,7 +111,7 @@ Rectangle {
                 leftPadding: 4
                 rightPadding: 4
                 font.pointSize: theme.sidebarFontSize + 3
-                ToolTip.text: "Recolher projetos e conversas"
+                ToolTip.text: "Recolher projetos e conversas (Ctrl+B)"
                 ToolTip.visible: hovered
                 onClicked: sidebar.collapseRequested()
             }
@@ -102,58 +122,22 @@ Rectangle {
             icon.source: "qrc:/resources/icons/plus.svg"
             Layout.fillWidth: true
             font.pointSize: theme.sidebarFontSize
+            ToolTip.text: "Ctrl+N"
+            ToolTip.visible: hovered
             onClicked: app.newConversation(app.activeProjectId)
         }
 
-        SidebarAction {
-            text: "Novo projeto"
-            icon.source: "qrc:/resources/icons/folder.svg"
+        // Tools stay one click away without pushing the conversation list down.
+        RowLayout {
             Layout.fillWidth: true
-            onClicked: newProjectDialog.open()
-        }
-
-        SidebarAction {
-            text: "Plugins MCP"
-            icon.source: "qrc:/resources/icons/plugin.svg"
-            Layout.fillWidth: true
-            onClicked: settingsDialog.openPlugins()
-        }
-
-        SidebarAction {
-            text: "Atividades"
-            icon.source: "qrc:/resources/icons/list.svg"
-            Layout.fillWidth: true
-            onClicked: {
-                app.refreshActivities()
-                activitiesDialog.open()
-            }
-        }
-
-        SidebarAction {
-            text: "Automações"
-            icon.source: "qrc:/resources/icons/clock.svg"
-            Layout.fillWidth: true
-            onClicked: automationsDialog.open()
-        }
-
-        SidebarAction {
-            text: "Tarefas em segundo plano"
-            icon.source: "qrc:/resources/icons/list.svg"
-            Layout.fillWidth: true
-            onClicked: sidebar.workspaceRequested(0)
-        }
-        SidebarAction {
-            text: "Navegador"
-            icon.source: "qrc:/resources/icons/globe.svg"
-            Layout.fillWidth: true
-            onClicked: sidebar.workspaceRequested(1)
-        }
-
-        SidebarAction {
-            text: "Terminal"
-            icon.source: "qrc:/resources/icons/terminal.svg"
-            Layout.fillWidth: true
-            onClicked: sidebar.openTerminal()
+            spacing: 2
+            ToolIcon { icon.source: "qrc:/resources/icons/folder.svg"; hint: "Novo projeto"; onClicked: newProjectDialog.open() }
+            ToolIcon { icon.source: "qrc:/resources/icons/globe.svg"; hint: "Navegador (Ctrl+L)"; onClicked: sidebar.workspaceRequested(1) }
+            ToolIcon { icon.source: "qrc:/resources/icons/terminal.svg"; hint: "Terminal (Ctrl+`)"; onClicked: sidebar.openTerminal() }
+            ToolIcon { icon.source: "qrc:/resources/icons/tasks.svg"; hint: "Tarefas em segundo plano"; onClicked: sidebar.workspaceRequested(0) }
+            ToolIcon { icon.source: "qrc:/resources/icons/clock.svg"; hint: "Automações"; onClicked: sidebar.openAutomations() }
+            ToolIcon { icon.source: "qrc:/resources/icons/activity.svg"; hint: "Atividades"; onClicked: sidebar.openActivities() }
+            ToolIcon { icon.source: "qrc:/resources/icons/plugin.svg"; hint: "Plugins MCP"; onClicked: sidebar.openPlugins() }
         }
 
         Rectangle {
@@ -166,7 +150,7 @@ Rectangle {
 
         AppTextField {
             id: search
-            placeholderText: "Pesquisar..."
+            placeholderText: "Pesquisar… (Ctrl+F)"
             Layout.fillWidth: true
             font.pointSize: theme.sidebarFontSize
             font.family: theme.fontFamily
@@ -185,6 +169,11 @@ Rectangle {
                 height: 16
                 source: "qrc:/resources/icons/search.svg"
                 color: theme.muted
+            }
+
+            Keys.onEscapePressed: {
+                text = ""
+                focus = false
             }
 
             onTextChanged: {
@@ -211,6 +200,22 @@ Rectangle {
             model: sidebar.filteredModel
             spacing: 1
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            footer: Text {
+                width: list.width
+                visible: search.text.length > 0 ? list.count === 0 : !sidebar.hasConversations
+                height: visible ? implicitHeight + 24 : 0
+                topPadding: 12
+                leftPadding: 12
+                rightPadding: 12
+                wrapMode: Text.Wrap
+                color: theme.muted
+                font.pointSize: Math.max(9, theme.sidebarFontSize - 1)
+                font.family: theme.fontFamily
+                text: search.text.length > 0
+                      ? (search.text.trim().length < 2 ? "Digite ao menos 2 letras." : "Nada encontrado para \"" + search.text + "\".")
+                      : "Nenhuma conversa ainda. Use \"Nova conversa\" ou Ctrl+N para começar."
+            }
 
             delegate: Rectangle {
                 id: itemRect
@@ -436,6 +441,18 @@ Rectangle {
         }
 
         MenuItem {
+            text: "Renomear projeto"
+            onTriggered: renameProjectDialog.open()
+        }
+
+        MenuItem {
+            text: "Abrir pasta do projeto"
+            onTriggered: app.openProjectFolder(ctx.targetId)
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
             text: "Excluir projeto"
             onTriggered: deleteProjectDialog.open()
         }
@@ -490,6 +507,7 @@ Rectangle {
             id: tagsField
             width: parent.width
             placeholderText: "Ex.: trabalho, urgente"
+            onAccepted: tagsDialog.accept()
         }
 
         onOpened: tagsField.text = app.conversationTags(ctx.targetId)
@@ -510,10 +528,39 @@ Rectangle {
             id: renameField
             width: parent.width
             text: ctx.targetTitle
+            onAccepted: renameDialog.accept()
         }
 
-        onOpened: renameField.text = ctx.targetTitle
+        onOpened: {
+            renameField.text = ctx.targetTitle
+            renameField.forceActiveFocus()
+            renameField.selectAll()
+        }
         onAccepted: app.renameConversation(ctx.targetId, renameField.text)
+    }
+
+    AppDialog {
+        id: renameProjectDialog
+        parent: Overlay.overlay
+        title: "Renomear projeto"
+        modal: true
+        font.pointSize: theme.fontSize
+        anchors.centerIn: parent
+        width: 380
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        AppTextField {
+            id: renameProjectField
+            width: parent.width
+            onAccepted: renameProjectDialog.accept()
+        }
+
+        onOpened: {
+            renameProjectField.text = ctx.targetTitle
+            renameProjectField.forceActiveFocus()
+            renameProjectField.selectAll()
+        }
+        onAccepted: app.renameProject(ctx.targetId, renameProjectField.text)
     }
 
     AppDialog {

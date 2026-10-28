@@ -17,6 +17,8 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QJSValue>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 // Render the actual application resources using fictional data only.
 // Never load the developer's config, account, MCP processes, or remote API.
@@ -112,15 +114,24 @@ int main(int argc, char **argv) {
             if (!check(main && tools, "Painel de ferramentas ausente")) return;
             QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 0));
             QTest::qWait(150);
+#ifdef Q_OS_WIN
+            const int id = app.startBackgroundTask("echo TASK_VISIBLE& ping -n 31 127.0.0.1 >nul");
+#else
             const int id = app.startBackgroundTask("printf TASK_VISIBLE; sleep 30");
+#endif
             tools->setProperty("selectedTask", id);
-            QTest::qWait(250);
+            for (int i = 0; i < 30 && !app.backgroundTaskOutput(id).contains("TASK_VISIBLE"); ++i) QTest::qWait(100);
             if (!check(app.backgroundTaskOutput(id).contains("TASK_VISIBLE"), "Tarefa não iniciou")) return;
             main->setProperty("workspaceOpen", false);
             QTest::qWait(100);
             if (!check(app.backgroundTasks().first().toMap().value("running").toBool(), "Recolher parou a tarefa")) return;
             QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 2));
+#ifdef Q_OS_WIN
+            // The caret keeps the typed command from matching the expected output.
+            app.runTerminalCommand("echo TERMINAL^_VISIVEL");
+#else
             app.runTerminalCommand("printf '%s_%s\\n' TERMINAL VISIVEL");
+#endif
             for (int i = 0; i < 30 && !tools->property("terminalText").toString().contains("TERMINAL_VISIVEL"); ++i) QTest::qWait(100);
             if (!check(tools->property("terminalText").toString().contains("TERMINAL_VISIVEL"), "Terminal não mostrou saída")) return;
             save(QStringLiteral("terminal-integrado"));
@@ -131,8 +142,12 @@ int main(int argc, char **argv) {
                 while (server.hasPendingConnections()) {
                     auto *socket = server.nextPendingConnection();
                     QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket] {
-                        socket->readAll();
-                        const QByteArray body = "<html><head><title>Preview local OK</title></head><body style='font-family:sans-serif;padding:32px'><h1>Previa do projeto</h1><button id='check' onclick=\"document.title='Interacao OK'\">Testar interacao</button></body></html>";
+                        const bool second = socket->readAll().startsWith("GET /pagina2");
+                        const QByteArray body = second
+                            ? QByteArray("<html><head><title>Pagina 2</title></head><body><p>SEGUNDA_PAGINA</p></body></html>")
+                            : QByteArray("<html><head><title>Preview local OK</title></head><body style='font-family:sans-serif;padding:32px'><h1>Previa do projeto</h1>"
+                                         "<button id='check' onclick=\"document.title='Interacao OK'\">Testar interacao</button>"
+                                         "<p><input id='busca' name='q' placeholder='Buscar'></p><p><a href='/pagina2'>Próxima página</a></p></body></html>");
                         socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
                         socket->disconnectFromHost();
                     });
@@ -141,10 +156,23 @@ int main(int argc, char **argv) {
             });
             QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 1));
             main->setProperty("workspaceExpanded", true);
-            QTest::qWait(400);
-            auto *browser = window->findChild<QObject *>(QStringLiteral("browserPane"));
-            auto *web = window->findChild<QObject *>(QStringLiteral("workspaceWebView"));
-            if (!check(browser && web, "Navegador não carregou")) return;
+            QObject *browser = nullptr;
+            QObject *web = nullptr;
+            // Chromium starts on first use; give slower machines time to create the view.
+            for (int i = 0; i < 100 && !(browser && web); ++i) {
+                QTest::qWait(100);
+                browser = window->findChild<QObject *>(QStringLiteral("browserPane"));
+                // Tabs come from a Repeater, outside the QObject tree findChild walks.
+                web = browser ? browser->property("current").value<QObject *>() : nullptr;
+            }
+            if (!browser || !web) {
+                auto *loader = window->findChild<QObject *>(QStringLiteral("browserLoader"));
+                std::fprintf(stderr, "Navegador não carregou (loader=%d ativo=%d status=%d painel=%d página=%d)\n",
+                             loader != nullptr, loader && loader->property("active").toBool(),
+                             loader ? loader->property("status").toInt() : -1, browser != nullptr, web != nullptr);
+                QCoreApplication::exit(1);
+                return;
+            }
             const QString url = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
             QMetaObject::invokeMethod(browser, "navigate", Q_ARG(QVariant, url));
             for (int i = 0; i < 100 && web->property("title").toString() != "Preview local OK"; ++i) QTest::qWait(100);
@@ -154,11 +182,40 @@ int main(int argc, char **argv) {
             for (int i = 0; i < 30 && web->property("title").toString() != "Interacao OK"; ++i) QTest::qWait(100);
             if (!check(web->property("title").toString() == "Interacao OK", "JavaScript não interagiu com a página")) return;
             save(QStringLiteral("navegador-integrado"));
+            // Agent tools run their real scripts in Chromium: read, type, click a link, go back.
+            QHash<int, QVariantMap> replies;
+            QObject::connect(&app, &AppController::agentBrowserReplied, &app,
+                             [&replies](int id, const QVariantMap &reply) { replies.insert(id, reply); });
+            auto agent = [&](int id, const char *tool, const QJsonObject &args) {
+                QString error, detail;
+                const QVariantMap request = AppController::agentBrowserRequestFor(QString::fromLatin1(tool), args, &error, &detail);
+                QMetaObject::invokeMethod(browser, "agentRequest", Q_ARG(QVariant, id), Q_ARG(QVariant, request));
+                for (int i = 0; i < 150 && !replies.contains(id); ++i) QTest::qWait(100);
+                return replies.value(id);
+            };
+            const QVariantMap read = agent(901, "browser_read", {});
+            const QString readLinks = QString::fromUtf8(QJsonDocument::fromVariant(read.value("links")).toJson());
+            const QString readFields = QString::fromUtf8(QJsonDocument::fromVariant(read.value("fields")).toJson());
+            if (!check(read.value("content").toString().contains("Previa do projeto") && readLinks.contains("/pagina2")
+                       && readFields.contains("#busca"), "browser_read não leu texto, links e campos")) return;
+            const QVariantMap typed = agent(902, "browser_type", {{"selector", "#busca"}, {"text", "ola"}});
+            if (!check(typed.value("action").toMap().value("typed").toBool(), "browser_type não preencheu o campo")) return;
+            const QVariantMap clicked = agent(903, "browser_click", {{"text", "Próxima página"}});
+            if (!check(clicked.value("url").toString().endsWith("/pagina2")
+                       && clicked.value("content").toString().contains("SEGUNDA_PAGINA"), "browser_click não navegou")) return;
+            const QVariantMap back = agent(904, "browser_back", {});
+            // The page may come back from the cache with the title the earlier click set.
+            if (back.value("url").toString() != url || !back.value("content").toString().contains("Previa do projeto")) {
+                std::fprintf(stderr, "browser_back não voltou (url=%s, ação=%s)\n", qPrintable(back.value("url").toString()),
+                             QJsonDocument::fromVariant(back.value("action")).toJson(QJsonDocument::Compact).constData());
+                QCoreApplication::exit(1);
+                return;
+            }
             QMetaObject::invokeMethod(main, "openWorkspace", Q_ARG(QVariant, 0));
             QTest::qWait(150);
             save(QStringLiteral("tarefas-segundo-plano"));
             app.stopBackgroundTask(id);
-            std::fprintf(stdout, "Workspace: tarefa em segundo plano, terminal PTY, HTTP local e JavaScript verificados.\n");
+            std::fprintf(stdout, "Workspace: tarefa em segundo plano, terminal PTY, HTTP local, JavaScript e ferramentas do agente no navegador verificados.\n");
             QCoreApplication::exit(0);
         });
         return application.exec();

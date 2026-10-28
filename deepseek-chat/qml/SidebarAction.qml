@@ -21,7 +21,7 @@ AppButton {
             id: label
             anchors.verticalCenter: parent.verticalCenter
             text: control.text
-            color: control.palette.buttonText
+            color: control.icon.color
             font: control.font
             elide: Text.ElideRight
             width: Math.max(0, control.availableWidth - control.icon.width - parent.spacing)

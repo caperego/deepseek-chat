@@ -12,7 +12,14 @@ public:
             if (m_state == Escape) {
                 m_state = ch == '[' ? Csi : ch == ']' ? Osc : Normal;
             } else if (m_state == Csi) {
-                if (ch >= 0x40 && ch <= 0x7e) m_state = Normal;
+                if (ch >= 0x40 && ch <= 0x7e) {
+                    m_state = Normal;
+                    // ConPTY moves the cursor (CUP) instead of sending line feeds.
+                    if ((ch == 'H' || ch == 'f') && !m_atLineStart) {
+                        plain.append('\n');
+                        m_atLineStart = true;
+                    }
+                }
             } else if (m_state == Osc) {
                 if (ch == 7) m_state = Normal;
                 else if (ch == 27) m_state = OscEscape;
@@ -21,13 +28,17 @@ public:
             } else if (ch == 27) {
                 m_state = Escape;
             } else if (ch == '\n' || ch == '\t' || ch >= 32) {
-                if (ch != 127) plain.append(char(ch));
+                if (ch != 127) {
+                    plain.append(char(ch));
+                    m_atLineStart = ch == '\n';
+                }
             }
         }
         return m_decoder(plain);
     }
-    void reset() { m_state = Normal; m_decoder.resetState(); }
+    void reset() { m_state = Normal; m_atLineStart = true; m_decoder.resetState(); }
 private:
     enum State { Normal, Escape, Csi, Osc, OscEscape } m_state = Normal;
+    bool m_atLineStart = true;
     QStringDecoder m_decoder{QStringDecoder::Utf8};
 };

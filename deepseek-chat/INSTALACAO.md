@@ -119,13 +119,15 @@ sudo pacman -S whisper-cpp
 
 1. Baixe o **Qt Online Installer** (conta gratuita): https://www.qt.io/download-qt-installer
 2. Marque os componentes:
-   - **Qt 6.x → MSVC 2022 64-bit** (recomendado) **ou** **MinGW 64-bit**
+   - **Qt 6.x → MSVC 2022 64-bit** (obrigatório: o Qt WebEngine não existe para MinGW)
+   - **Qt WebEngine** (navegador integrado)
+   - **Qt PDF**
    - **Qt Multimedia**
    - **Qt Speech** (TextToSpeech)
    - **Qt SVG**
    - **Qt Quick Controls / Declarative** (já vem no Qt 6)
-3. Se usar MSVC, instale também o **Visual Studio Build Tools**
-   (workload "Desktop development with C++").
+3. Instale também o **Visual Studio Build Tools 2022**
+   (workload "Desenvolvimento para desktop com C++").
 
 ### 3.2 Cliente MySQL/MariaDB (driver QMYSQL)
 
@@ -138,12 +140,17 @@ Sem isso o app mostra: *"Driver QMYSQL não está disponível"*.
 
 ### 3.3 Compilar e distribuir
 
-Abra o **"Qt 6.x for Desktop"** no menu Iniciar e execute:
+Em qualquer prompt (cmd ou PowerShell), execute:
 
 ```bat
 build-windows.bat
-windeployqt bin\deepseek-chat.exe
+windeployqt --qmldir qml bin\deepseek-chat.exe
 ```
+
+O script procura o kit MSVC em `C:\Qt\6.*\msvc2022_64` e carrega o ambiente do
+Visual Studio sozinho. Para escolher outro kit, defina antes
+`set QT_DIR=C:\Qt\6.12.0\msvc2022_64`. Kits MinGW são recusados com uma
+mensagem, porque não têm o Qt WebEngine.
 
 ### 3.4 Áudio no Windows
 
@@ -289,16 +296,32 @@ requer bibliotecas compatíveis; para outras distribuições, gere o pacote nela
 Consulte o `LEIA-ME.txt` dentro do arquivo `.tar.gz` para dependências e remoção.
 
 
-### Painel de trabalho (1.3.0)
+### Painel lateral (1.3.0)
 
-Use **Tarefas em segundo plano**, **Navegador** ou **Terminal** na barra lateral.
-O painel pode ser ampliado, recolhido e redimensionado pela divisória horizontal.
-Recolher mantém os processos; Sair encerra as tarefas. O histórico de tarefas,
-a saída do terminal e o perfil do navegador são locais à sessão do aplicativo.
-As automações agendadas continuam sendo configuradas em Automações.
+**Arquivo**, **Navegador**, **Terminal** e **Tarefas** ficam num único painel à
+direita da conversa. Abra pelos ícones da barra lateral, pela paleta (Ctrl+K)
+ou pelos atalhos abaixo. A divisória vertical redimensiona o painel, **Expandir**
+usa a janela inteira e fechar (Ctrl+J) mantém tarefas e terminal rodando; Sair
+encerra as tarefas.
 
-O navegador visual requer o módulo Qt WebEngine Quick. No Manjaro/Arch,
-instale `qt6-webengine` junto das demais dependências. No instalador do Qt para
-Windows, selecione também Qt WebEngine. Os novos recursos foram validados no
-Linux; a implementação Windows usa os caminhos existentes de ConPTY/cmd.exe e
-não foi validada nesta revisão. O terminal linear não emula telas completas.
+- **Navegador**: abas (Ctrl+T, Ctrl+W, clique do meio), busca na página (Ctrl+F),
+  zoom (Ctrl++, Ctrl+-, Ctrl+0), ferramentas do desenvolvedor (F12), downloads
+  na pasta Downloads, avisos de permissão e de certificado, e anexar o texto ou
+  uma captura da página à mensagem. Links do chat abrem aqui (desative no menu
+  do navegador). Por padrão o perfil é anônimo; "Manter logins e cookies" usa
+  um perfil persistente.
+- **Tarefas**: a URL local anunciada pelo servidor (ex.: `http://localhost:5173`)
+  vira um botão de prévia; cada tarefa pode ser reiniciada. No Windows, parar uma
+  tarefa encerra toda a árvore de processos (Job Object); no Linux, o grupo.
+- **Terminal**: `cmd.exe` via ConPTY no Windows e `bash` num pseudoterminal no
+  Linux, com histórico (↑/↓) e Ctrl+C. É um terminal linear: não emula telas
+  completas nem cores.
+
+Atalhos gerais: Ctrl+K paleta, Ctrl+N nova conversa, Ctrl+B barra lateral,
+Ctrl+J painel, Ctrl+L endereço do navegador, Ctrl+F buscar, Ctrl+` terminal,
+Ctrl+, configurações, Ctrl+Tab / Ctrl+Shift+Tab próxima/anterior conversa,
+Esc interrompe a resposta. Digite `/` no início da mensagem para os comandos.
+
+O navegador requer o módulo Qt WebEngine Quick. No Manjaro/Arch, instale
+`qt6-webengine` junto das demais dependências; no Windows, o kit MSVC com
+Qt WebEngine.

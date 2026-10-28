@@ -53,6 +53,8 @@ struct UiConfig {
     QString globalInstructions;
     bool notifyOnFinish = true;
     bool closeToTray = true;
+    bool openLinksInternally = true;
+    bool browserPersistent = false;
     QStringList pinnedConversations;
     QHash<qint64, QStringList> conversationTags;
 };

@@ -49,6 +49,7 @@
 #include <QSharedPointer>
 #include <QSocketNotifier>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QTextToSpeech>
 #include <QTimer>
@@ -68,10 +69,7 @@
 #include <windows.h>
 #include <thread>
 #else
-#include <pty.h>
 #include <signal.h>
-#include <sys/ioctl.h>
-#include <termios.h>
 #include <unistd.h>
 #endif
 
@@ -290,17 +288,6 @@ QString backupsRoot()
         + QStringLiteral("/backups");
 }
 
-QString terminalShellProgram()
-{
-#ifdef Q_OS_WIN
-    return QStringLiteral("cmd.exe");
-#else
-    // A linear transcript must not load shell themes that rely on cursor positioning.
-    return QFileInfo::exists(QStringLiteral("/bin/bash"))
-        ? QStringLiteral("/bin/bash") : QStringLiteral("/bin/sh");
-#endif
-}
-
 bool isDangerousCommand(const QString &command)
 {
     static const QRegularExpression patterns(
@@ -319,189 +306,6 @@ bool isDangerousCommand(const QString &command)
         QRegularExpression::CaseInsensitiveOption);
     return patterns.match(command).hasMatch();
 }
-
-#ifdef Q_OS_WIN
-typedef void *DsHPCON;
-typedef HRESULT(WINAPI *CreatePseudoConsoleFn)(COORD, HANDLE, HANDLE, DWORD, DsHPCON *);
-typedef VOID(WINAPI *ClosePseudoConsoleFn)(DsHPCON);
-
-#ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
-#define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE 22
-#endif
-
-class ConPty {
-public:
-    ConPty(QObject *receiver, std::function<void(const QString &)> onData,
-           std::function<void(int)> onExit)
-        : m_receiver(receiver),
-          m_onData(std::move(onData)),
-          m_onExit(std::move(onExit))
-    {
-    }
-
-    bool start()
-    {
-        HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-        const auto create = reinterpret_cast<CreatePseudoConsoleFn>(
-            reinterpret_cast<void *>(GetProcAddress(kernel, "CreatePseudoConsole")));
-        const auto closePty = reinterpret_cast<ClosePseudoConsoleFn>(
-            reinterpret_cast<void *>(GetProcAddress(kernel, "ClosePseudoConsole")));
-        if (!create || !closePty)
-            return false;
-        m_closePty = closePty;
-
-        SECURITY_ATTRIBUTES sa{};
-        sa.nLength = sizeof(sa);
-        sa.bInheritHandle = TRUE;
-
-        HANDLE inRead = nullptr;
-        HANDLE inWrite = nullptr;
-        HANDLE outRead = nullptr;
-        HANDLE outWrite = nullptr;
-        if (!CreatePipe(&inRead, &inWrite, &sa, 0))
-            return false;
-        if (!CreatePipe(&outRead, &outWrite, &sa, 0)) {
-            CloseHandle(inRead);
-            CloseHandle(inWrite);
-            return false;
-        }
-
-        COORD size{120, 30};
-        DsHPCON pty = nullptr;
-        if (FAILED(create(size, inRead, outWrite, 0, &pty))) {
-            CloseHandle(inRead);
-            CloseHandle(inWrite);
-            CloseHandle(outRead);
-            CloseHandle(outWrite);
-            return false;
-        }
-        CloseHandle(inRead);
-        CloseHandle(outWrite);
-
-        STARTUPINFOEXW si{};
-        si.StartupInfo.cb = sizeof(si);
-        SIZE_T attrSize = 0;
-        InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
-        si.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
-            HeapAlloc(GetProcessHeap(), 0, attrSize));
-        if (!si.lpAttributeList
-            || !InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attrSize)
-            || !UpdateProcThreadAttribute(si.lpAttributeList, 0,
-                                          PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                                          pty, sizeof(pty), nullptr, nullptr)) {
-            closePty(pty);
-            CloseHandle(inWrite);
-            CloseHandle(outRead);
-            if (si.lpAttributeList)
-                HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
-            return false;
-        }
-
-        wchar_t command[] = L"cmd.exe";
-        PROCESS_INFORMATION pi{};
-        const BOOL created = CreateProcessW(nullptr, command, nullptr, nullptr, FALSE,
-                                            EXTENDED_STARTUPINFO_PRESENT, nullptr,
-                                            nullptr, &si.StartupInfo, &pi);
-        DeleteProcThreadAttributeList(si.lpAttributeList);
-        HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
-        if (!created) {
-            closePty(pty);
-            CloseHandle(inWrite);
-            CloseHandle(outRead);
-            return false;
-        }
-        CloseHandle(pi.hThread);
-
-        auto session = std::make_shared<Session>();
-        session->pty = pty;
-        session->inWrite = inWrite;
-        session->outRead = outRead;
-        session->process = pi.hProcess;
-        m_session = session;
-
-        std::thread([this, session] { readLoop(session); }).detach();
-        return true;
-    }
-
-    void write(const QByteArray &data)
-    {
-        auto session = m_session;
-        if (!session || !session->running.load())
-            return;
-        DWORD written = 0;
-        WriteFile(session->inWrite, data.constData(),
-                  static_cast<DWORD>(data.size()), &written, nullptr);
-    }
-
-    void close()
-    {
-        auto session = m_session;
-        m_session.reset();
-        if (!session)
-            return;
-        session->running.store(false);
-        if (session->pty) {
-            m_closePty(session->pty);
-            session->pty = nullptr;
-        }
-        if (session->process) {
-            TerminateProcess(session->process, 0);
-            CloseHandle(session->process);
-            session->process = nullptr;
-        }
-        if (session->inWrite) {
-            CloseHandle(session->inWrite);
-            session->inWrite = nullptr;
-        }
-    }
-
-private:
-    struct Session {
-        DsHPCON pty = nullptr;
-        HANDLE inWrite = nullptr;
-        HANDLE outRead = nullptr;
-        HANDLE process = nullptr;
-        std::atomic<bool> running{true};
-    };
-
-    void readLoop(std::shared_ptr<Session> session)
-    {
-        char buffer[4096];
-        DWORD read = 0;
-        while (session->running.load()
-               && ReadFile(session->outRead, buffer, sizeof(buffer), &read, nullptr)
-               && read > 0) {
-            const QByteArray data(buffer, static_cast<int>(read));
-            QMetaObject::invokeMethod(m_receiver,
-                [this, data] {
-                    if (m_onData)
-                        m_onData(QString::fromUtf8(data));
-                }, Qt::QueuedConnection);
-        }
-        if (session->outRead) {
-            CloseHandle(session->outRead);
-            session->outRead = nullptr;
-        }
-        int code = 0;
-        if (session->process) {
-            DWORD exitCode = 0;
-            GetExitCodeProcess(session->process, &exitCode);
-            code = static_cast<int>(exitCode);
-        }
-        QMetaObject::invokeMethod(m_receiver,
-            [this, code] {
-                if (m_onExit)
-                    m_onExit(code);
-            }, Qt::QueuedConnection);
-    }
-
-    QObject *m_receiver = nullptr;
-    std::function<void(const QString &)> m_onData;
-    std::function<void(int)> m_onExit;
-    std::shared_ptr<Session> m_session;
-    ClosePseudoConsoleFn m_closePty = nullptr;
-};
-#endif
 
 bool isImageSuffix(const QString &suffix)
 {
@@ -2022,6 +1826,7 @@ void AppController::destroyRun(AgentRun *run)
         return;
 
     removeApprovalsFor(run);
+    dropBrowserCallsFor(run);
     if (!run->automationId.isEmpty()) {
         m_automations.complete(run->automationId, QStringLiteral("Cancelada"), run->conversationId);
         emit automationsChanged();
@@ -2686,6 +2491,10 @@ void AppController::performToolCall(AgentRun *run, const ToolCall &call)
         browseUrl(run, call);
         return;
     }
+    if (isAgentBrowserTool(call.name)) {
+        agentBrowserCall(run, call);
+        return;
+    }
     if (call.name == QLatin1String("search_web")) {
         searchWeb(run, call);
         return;
@@ -2722,7 +2531,9 @@ void AppController::finishToolCall(AgentRun *run, const QString &result,
                                    const QString &summary)
 {
     if (run->currentTool.name == QLatin1String("fetch_url")
-        || run->currentTool.name == QLatin1String("browse_url")) {
+        || run->currentTool.name == QLatin1String("browse_url")
+        || run->currentTool.name == QLatin1String("browser_open")
+        || run->currentTool.name == QLatin1String("browser_read")) {
         const QJsonObject page = QJsonDocument::fromJson(result.toUtf8()).object();
         const QString url = page.value(QStringLiteral("url")).toString();
         const QString content = page.value(QStringLiteral("content")).toString().simplified();
@@ -3262,218 +3073,6 @@ QVariantList AppController::activeRuns() const
 void AppController::stopConversationRun(qint64 id)
 {
     if (auto *run = runFor(id)) stopRun(run);
-}
-
-bool AppController::terminalRunning() const
-{
-    return m_terminalRunning;
-}
-
-void AppController::runTerminalCommand(const QString &command)
-{
-    const QString trimmed = m_terminalRunning ? command : command.trimmed();
-    if (trimmed.isEmpty() && !m_terminalRunning)
-        return;
-
-#ifdef Q_OS_WIN
-    auto *pty = static_cast<ConPty *>(m_conpty);
-    if (pty && !m_terminalRunning) {
-        if (!pty->start()) {
-            delete pty;
-            m_conpty = nullptr;
-        } else {
-            m_terminalRunning = true;
-            emit terminalChanged();
-        }
-    }
-    if (!pty && !m_conpty) {
-        auto *created = new ConPty(this,
-            [this](const QString &text) { emit terminalOutput(m_terminalText.consume(text.toUtf8())); },
-            [this](int code) {
-                m_terminalRunning = false;
-                emit terminalOutput(
-                    QStringLiteral("\n[processo terminou: %1]\n").arg(code));
-                emit terminalChanged();
-            });
-        if (created->start()) {
-            m_conpty = created;
-            m_terminalRunning = true;
-            emit terminalChanged();
-            emit terminalOutput(QStringLiteral("DeepSeek Chat — terminal (ConPTY, cmd.exe)\n"));
-        } else {
-            delete created;
-            emit terminalOutput(QStringLiteral(
-                "[ConPTY indisponível — usando modo simples]\n"));
-        }
-    }
-    if (m_conpty) {
-        emit terminalOutput(QStringLiteral("> ") + trimmed + QLatin1Char('\n'));
-        static_cast<ConPty *>(m_conpty)->write(trimmed.toUtf8()
-                                               + QByteArrayLiteral("\r\n"));
-        return;
-    }
-#endif
-
-#ifndef Q_OS_WIN
-    if (!m_terminal && m_ptyMaster < 0) {
-        int master = -1;
-        int slave = -1;
-        struct winsize size = {30, 120, 0, 0};
-        if (openpty(&master, &slave, nullptr, nullptr, &size) == 0) {
-            m_terminalText.reset();
-            auto *process = new QProcess(this);
-            process->setProcessChannelMode(QProcess::ForwardedChannels);
-            auto environment = QProcessEnvironment::systemEnvironment();
-            environment.insert(QStringLiteral("TERM"), QStringLiteral("xterm-256color"));
-            environment.insert(QStringLiteral("PS1"), QStringLiteral("\\w $ "));
-            environment.insert(QStringLiteral("PROMPT"), QStringLiteral("%~ %# "));
-            environment.insert(QStringLiteral("RPROMPT"), QString());
-            environment.remove(QStringLiteral("PROMPT_COMMAND"));
-            process->setProcessEnvironment(environment);
-            const int slaveFd = slave;
-            process->setChildProcessModifier([slaveFd]() {
-                setsid();
-                ioctl(slaveFd, TIOCSCTTY, 0);
-                dup2(slaveFd, 0);
-                dup2(slaveFd, 1);
-                dup2(slaveFd, 2);
-                if (slaveFd > 2)
-                    close(slaveFd);
-            });
-            process->setWorkingDirectory(m_activeProject.workdir.isEmpty()
-                ? QDir::homePath() : m_activeProject.workdir);
-            const QString shell = terminalShellProgram();
-            const QString name = QFileInfo(shell).fileName();
-            QStringList arguments;
-            if (name == QLatin1String("bash")) arguments = {"--noprofile", "--norc", "-i"};
-            else if (name == QLatin1String("zsh")) arguments = {"-f", "-i"};
-            else arguments = {"-i"};
-            process->start(shell, arguments);
-            if (process->waitForStarted(5000)) {
-                ::close(slave);
-                m_ptyMaster = master;
-                m_terminal = process;
-                auto *notifier = new QSocketNotifier(master, QSocketNotifier::Read, this);
-                connect(notifier, &QSocketNotifier::activated, this, [this] {
-                    char buffer[4096];
-                    const ssize_t n = ::read(m_ptyMaster, buffer, sizeof(buffer));
-                    if (n > 0)
-                        emit terminalOutput(m_terminalText.consume(QByteArray(buffer, static_cast<int>(n))));
-                });
-                m_ptyNotifier = notifier;
-                connect(process, QOverload<int, QProcess::ExitStatus>::of(
-                                     &QProcess::finished),
-                        this, [this](int code, QProcess::ExitStatus) {
-                            terminalOutput(QStringLiteral("\n[processo terminou: %1]\n")
-                                               .arg(code));
-                            if (m_ptyNotifier) {
-                                m_ptyNotifier->setEnabled(false);
-                                m_ptyNotifier->deleteLater();
-                                m_ptyNotifier = nullptr;
-                            }
-                            if (m_ptyMaster >= 0) {
-                                ::close(m_ptyMaster);
-                                m_ptyMaster = -1;
-                            }
-                            if (m_terminal) {
-                                m_terminal->deleteLater();
-                                m_terminal = nullptr;
-                            }
-                            m_terminalRunning = false;
-                            emit terminalChanged();
-                        });
-                m_terminalRunning = true;
-                emit terminalChanged();
-            } else {
-                ::close(master);
-                ::close(slave);
-                process->deleteLater();
-            }
-        }
-    }
-    if (m_ptyMaster >= 0) {
-        const QByteArray payload = trimmed.toUtf8() + QByteArrayLiteral("\n");
-        const ssize_t written = ::write(m_ptyMaster, payload.constData(),
-                                        static_cast<size_t>(payload.size()));
-        Q_UNUSED(written);
-        return;
-    }
-#endif
-
-    if (!m_terminal) {
-        m_terminal = new QProcess(this);
-        m_terminal->setProcessChannelMode(QProcess::MergedChannels);
-        m_terminal->setWorkingDirectory(m_activeProject.workdir.isEmpty()
-                                            ? QDir::homePath()
-                                            : m_activeProject.workdir);
-        connect(m_terminal, &QProcess::readyRead, this, [this] {
-            if (m_terminal)
-                emit terminalOutput(QString::fromUtf8(m_terminal->readAll()));
-        });
-        connect(m_terminal, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                this, [this](int code, QProcess::ExitStatus) {
-                    emit terminalOutput(
-                        QStringLiteral("\n[processo terminou: %1]\n").arg(code));
-                    m_terminal->deleteLater();
-                    m_terminal = nullptr;
-                    m_terminalRunning = false;
-                    emit terminalChanged();
-                });
-        m_terminal->start(terminalShellProgram());
-        if (!m_terminal->waitForStarted(5000)) {
-            emit terminalOutput(QStringLiteral("[falha ao iniciar o shell]\n"));
-            m_terminal->deleteLater();
-            m_terminal = nullptr;
-            m_terminalRunning = false;
-            emit terminalChanged();
-            return;
-        }
-        m_terminalRunning = true;
-        emit terminalChanged();
-    }
-
-    emit terminalOutput(QStringLiteral("> ") + trimmed + QLatin1Char('\n'));
-    m_terminal->write(trimmed.toUtf8() + QByteArrayLiteral("\r\n"));
-}
-
-void AppController::sendTerminalInput(const QString &text)
-{
-#ifdef Q_OS_WIN
-    if (m_conpty) {
-        static_cast<ConPty *>(m_conpty)->write(text.toUtf8() + QByteArrayLiteral("\r\n"));
-        return;
-    }
-#else
-    if (m_ptyMaster >= 0) {
-        const QByteArray payload = text.toUtf8() + QByteArrayLiteral("\n");
-        const ssize_t written = ::write(m_ptyMaster, payload.constData(),
-                                        static_cast<size_t>(payload.size()));
-        Q_UNUSED(written);
-        return;
-    }
-#endif
-    if (!m_terminal)
-        return;
-    m_terminal->write(text.toUtf8() + QByteArrayLiteral("\r\n"));
-}
-
-void AppController::killTerminal()
-{
-#ifdef Q_OS_WIN
-    if (m_conpty) {
-        static_cast<ConPty *>(m_conpty)->close();
-        return;
-    }
-#endif
-    if (!m_terminal)
-        return;
-#ifndef Q_OS_WIN
-    if (m_ptyMaster >= 0) {
-        const pid_t foreground = ::tcgetpgrp(m_ptyMaster);
-        if (foreground > 0 && foreground != ::getpgrp()) ::kill(-foreground, SIGKILL);
-    }
-#endif
-    m_terminal->kill();
 }
 
 QString AppController::gitStatusText()
@@ -4511,7 +4110,12 @@ QString AppController::agentContextText() const
         "uma linha no formato ![descrição](caminho_do_arquivo) — o aplicativo mostra a "
         "imagem inline; use caminho relativo à pasta do projeto ou absoluto. "
         "Quando a mensagem do usuário citar um link (URL), use fetch_url ou browse_url "
-        "para ler o conteúdo da página antes de responder.");
+        "para ler o conteúdo da página antes de responder. "
+        "Quando o usuário pedir para abrir, mostrar ou navegar em um site, use o navegador "
+        "integrado do aplicativo: browser_open, browser_read, browser_click, browser_type e "
+        "browser_back. Ele já está disponível e visível ao usuário; não procure navegadores "
+        "nem ambiente gráfico com run_command.");
+    context += QStringLiteral("\nSistema operacional: %1.").arg(QSysInfo::prettyProductName());
     context += QStringLiteral("\nPasta de trabalho: %1")
                    .arg(m_activeProject.workdir.isEmpty()
                             ? QStringLiteral("(não definida)")
@@ -4580,6 +4184,12 @@ bool AppController::toolNeedsApproval(const AgentRun *run, const ToolCall &call,
 
     if (call.name.startsWith(QLatin1String("mcp__")))
         return true;
+
+    // Opening, clicking and typing act on the user's visible browser (and its
+    // logins); reading the current page or going back does not.
+    if (isAgentBrowserTool(call.name))
+        return call.name != QLatin1String("browser_read")
+            && call.name != QLatin1String("browser_back");
 
     QString error;
     const QJsonObject args = parseArguments(call, &error);
@@ -5612,6 +5222,12 @@ QString AppController::toolApprovalTitle(const ToolCall &call)
         || call.name == QLatin1String("browse_url")
         || call.name == QLatin1String("search_web"))
         return QStringLiteral("A IA quer acessar a internet");
+    if (call.name == QLatin1String("browser_open"))
+        return QStringLiteral("A IA quer abrir uma página no navegador integrado");
+    if (call.name == QLatin1String("browser_click"))
+        return QStringLiteral("A IA quer clicar na página do navegador integrado");
+    if (call.name == QLatin1String("browser_type"))
+        return QStringLiteral("A IA quer preencher um campo no navegador integrado");
     if (call.name == QLatin1String("download_file"))
         return QStringLiteral("A IA quer baixar um arquivo");
     if (call.name == QLatin1String("run_command")) {
@@ -5644,8 +5260,19 @@ QString AppController::toolApprovalDetail(const AgentRun *run, const ToolCall &c
         return QStringLiteral("Pesquisa: %1")
             .arg(args.value(QStringLiteral("query")).toString());
     if (call.name == QLatin1String("fetch_url")
-        || call.name == QLatin1String("browse_url"))
+        || call.name == QLatin1String("browse_url")
+        || call.name == QLatin1String("browser_open"))
         return QStringLiteral("URL: %1").arg(args.value(QStringLiteral("url")).toString());
+    if (call.name == QLatin1String("browser_click")) {
+        const QString text = args.value(QStringLiteral("text")).toString();
+        return text.isEmpty() ? QStringLiteral("Elemento: %1").arg(args.value(QStringLiteral("selector")).toString())
+                              : QStringLiteral("Clicar em: %1").arg(text);
+    }
+    if (call.name == QLatin1String("browser_type"))
+        return QStringLiteral("Campo: %1\nTexto: %2%3")
+            .arg(args.value(QStringLiteral("selector")).toString(),
+                 args.value(QStringLiteral("text")).toString(),
+                 args.value(QStringLiteral("submit")).toBool() ? QStringLiteral("\n(enviar o formulário)") : QString());
 
     if (call.name == QLatin1String("download_file")) {
         QString detail = QStringLiteral("URL: %1")
@@ -5833,6 +5460,37 @@ QJsonArray AppController::toolDefinitions()
                                          "(JavaScript) e retorna o texto; se não houver "
                                          "navegador, baixa como fetch_url."),
                           browseProps, QJsonArray{QStringLiteral("url")}));
+
+    tools.append(makeTool(QStringLiteral("browser_open"),
+        QStringLiteral("Abre uma URL no navegador integrado do aplicativo, visível ao usuário no painel "
+                       "lateral, e retorna título, texto, links e campos da página. Use quando o usuário "
+                       "pedir para abrir, ver ou navegar em um site."),
+        QJsonObject{{"url", stringProp(QStringLiteral("URL http(s)."))},
+                    {"new_tab", boolProp(QStringLiteral("Abrir em uma nova aba."))}},
+        QJsonArray{QStringLiteral("url")}));
+    // Every tool declares at least one property: the backend decodes JSON into PHP
+    // arrays, and an empty "properties" object would reach the provider as [].
+    tools.append(makeTool(QStringLiteral("browser_read"),
+        QStringLiteral("Lê a página atual do navegador integrado: título, URL, texto, links e campos."),
+        QJsonObject{{"max_chars", intProp(QStringLiteral("Máximo de caracteres do texto (padrão 20000)."))}},
+        QJsonArray()));
+    tools.append(makeTool(QStringLiteral("browser_click"),
+        QStringLiteral("Clica em um link ou botão da página atual do navegador integrado, pelo texto visível "
+                       "ou por um seletor CSS retornado em fields, e retorna a página resultante."),
+        QJsonObject{{"text", stringProp(QStringLiteral("Texto visível do link ou botão."))},
+                    {"selector", stringProp(QStringLiteral("Seletor CSS do elemento (opcional)."))}},
+        QJsonArray()));
+    tools.append(makeTool(QStringLiteral("browser_type"),
+        QStringLiteral("Preenche um campo da página atual do navegador integrado e, se submit for true, "
+                       "envia o formulário. Nunca digite senhas ou dados de pagamento."),
+        QJsonObject{{"selector", stringProp(QStringLiteral("Seletor CSS do campo, de fields."))},
+                    {"text", stringProp(QStringLiteral("Texto a digitar."))},
+                    {"submit", boolProp(QStringLiteral("Enviar o formulário depois de digitar."))}},
+        QJsonArray{QStringLiteral("selector"), QStringLiteral("text")}));
+    tools.append(makeTool(QStringLiteral("browser_back"),
+        QStringLiteral("Volta para páginas anteriores no navegador integrado."),
+        QJsonObject{{"steps", intProp(QStringLiteral("Quantas páginas voltar (padrão 1)."))}},
+        QJsonArray()));
 
     QJsonObject restoreProps;
     restoreProps.insert(QStringLiteral("path"), stringProp(QStringLiteral(

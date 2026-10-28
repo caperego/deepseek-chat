@@ -168,6 +168,10 @@ bool Config::load(QString *error)
                                   m_ui.notifyOnFinish).toBool();
     m_ui.closeToTray = s.value(QStringLiteral("close_to_tray"),
                                m_ui.closeToTray).toBool();
+    m_ui.openLinksInternally = s.value(QStringLiteral("open_links_internally"),
+                                       m_ui.openLinksInternally).toBool();
+    m_ui.browserPersistent = s.value(QStringLiteral("browser_persistent"),
+                                     m_ui.browserPersistent).toBool();
     s.endGroup();
 
     m_permissions.clear();
@@ -279,6 +283,8 @@ bool Config::save(QString *error) const
     s.setValue(QStringLiteral("global_instructions"), m_ui.globalInstructions);
     s.setValue(QStringLiteral("notify_on_finish"), m_ui.notifyOnFinish);
     s.setValue(QStringLiteral("close_to_tray"), m_ui.closeToTray);
+    s.setValue(QStringLiteral("open_links_internally"), m_ui.openLinksInternally);
+    s.setValue(QStringLiteral("browser_persistent"), m_ui.browserPersistent);
     s.endGroup();
 
     s.beginGroup(QStringLiteral("conversation_tags"));

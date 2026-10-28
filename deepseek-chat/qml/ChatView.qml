@@ -5,7 +5,47 @@ import QtQuick.Layouts
 Item {
     id: view
 
+    signal workspaceRequested(int tab)
     property var detectedLinks: []
+    // Unsent text is kept per conversation while the application is open.
+    property var drafts: ({})
+    property var draftConversationId: 0
+    property var slashMatches: []
+
+    function permissionLabel(mode) {
+        return mode === "full" ? "Acesso completo" : (mode === "auto" ? "Aprovar por mim" : "Solicitar aprovação")
+    }
+
+    function updateSlashMatches() {
+        var text = input.text
+        if (text.length === 0 || text.charAt(0) !== "/" || /\s/.test(text)) {
+            slashMatches = []
+            return
+        }
+        var query = text.substring(1).toLowerCase()
+        slashMatches = commandsMenu.allCommands.filter(function(command) {
+            return command.name.toLowerCase().indexOf(query) === 0
+        }).slice(0, 8)
+        slashList.currentIndex = 0
+    }
+
+    function useCommand(command) {
+        input.text = command.prompt
+        input.cursorPosition = input.length
+        input.forceActiveFocus()
+        slashMatches = []
+        app.logClientActivity("command_use", command.name)
+    }
+
+    function sendInput() {
+        var text = input.text
+        if (text.trim().length === 0) return
+        input.text = ""
+        var drafts = view.drafts
+        delete drafts[String(app.currentConversationId)]
+        view.drafts = drafts
+        app.send(text)
+    }
 
     function updateLinks() {
         var re = /https?:\/\/[^\s<>"']+/g
@@ -52,6 +92,28 @@ Item {
                 }
 
                 AppButton {
+                    id: permissionChip
+                    objectName: "permissionChip"
+                    readonly property string mode: app.activeProjectPermissionMode
+                    text: view.width < 900 ? "" : view.permissionLabel(mode)
+                    icon.source: "qrc:/resources/icons/shield.svg"
+                    icon.color: mode === "full" ? theme.danger : (mode === "auto" ? theme.accent : theme.text)
+                    palette.buttonText: icon.color
+                    ghost: true
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Permissões da IA " + (app.activeProjectId > 0 ? "neste projeto" : "nas conversas soltas")
+                                  + ": " + view.permissionLabel(mode) + ". Clique para alterar."
+                    onClicked: permissionMenu.popup()
+
+                    Menu {
+                        id: permissionMenu
+                        MenuItem { text: "Solicitar aprovação"; checkable: true; checked: permissionChip.mode === "ask"; onTriggered: app.setPermissionMode("ask") }
+                        MenuItem { text: "Aprovar por mim (ações seguras)"; checkable: true; checked: permissionChip.mode === "auto"; onTriggered: app.setPermissionMode("auto") }
+                        MenuItem { text: "Acesso completo"; checkable: true; checked: permissionChip.mode === "full"; onTriggered: app.setPermissionMode("full") }
+                    }
+                }
+
+                AppButton {
                     visible: app.currentParentId > 0
                     text: view.width < 850 ? "↶" : "↶ Retroceder versão"
                     ghost: true
@@ -62,9 +124,11 @@ Item {
 
                 AppButton {
                     id: usageButton
-                    text: app.usageInfo.costText || "—"
+                    text: app.usageInfo.costText || (view.width < 900 ? "" : "Custos")
                     icon.source: "qrc:/resources/icons/chart.svg"
                     ghost: true
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Custos, tokens e saldo da conta"
                     onClicked: usagePopup.open()
 
                     Popup {
@@ -199,10 +263,13 @@ Item {
             }
         }
 
-        ListView {
-            id: messageList
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
+
+        ListView {
+            id: messageList
+            anchors.fill: parent
             clip: true
             model: app.messageModel
             spacing: 14
@@ -229,6 +296,22 @@ Item {
                 if (autoScroll)
                     positionViewAtEnd()
             }
+        }
+
+        AppButton {
+            objectName: "jumpToEndButton"
+            visible: !messageList.autoScroll && messageList.count > 0
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            text: app.streaming ? "Acompanhar resposta" : "Ir para o fim"
+            icon.source: "qrc:/resources/icons/arrow-down.svg"
+            cornerRadius: 18
+            onClicked: {
+                messageList.autoScroll = true
+                messageList.positionViewAtEnd()
+            }
+        }
         }
 
         Rectangle {
@@ -291,7 +374,7 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: app.openExternal(modelData)
+                                onClicked: app.openLink(modelData)
 
                                 ToolTip.visible: containsMouse
                                 ToolTip.text: "Abrir " + modelData
@@ -399,6 +482,40 @@ Item {
                     }
                 }
 
+                Rectangle {
+                    objectName: "slashSuggestions"
+                    Layout.fillWidth: true
+                    visible: view.slashMatches.length > 0
+                    implicitHeight: Math.min(260, slashList.contentHeight + 12)
+                    radius: 12
+                    color: theme.card
+                    border.color: theme.border
+                    ListView {
+                        id: slashList
+                        anchors.fill: parent
+                        anchors.margins: 6
+                        clip: true
+                        model: view.slashMatches
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+                            width: slashList.width
+                            height: slashRow.implicitHeight + 10
+                            radius: 8
+                            color: index === slashList.currentIndex ? theme.selected : "transparent"
+                            TapHandler { onTapped: view.useCommand(modelData) }
+                            RowLayout {
+                                id: slashRow
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                Text { text: "/" + modelData.name; color: theme.text; font.bold: true }
+                                Text { Layout.fillWidth: true; text: modelData.prompt; color: theme.muted; elide: Text.ElideRight; maximumLineCount: 1 }
+                            }
+                        }
+                    }
+                }
+
                 ScrollView {
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.min(200, Math.max(72,
@@ -410,7 +527,10 @@ Item {
                         wrapMode: TextArea.Wrap
                         font.pointSize: theme.chatFontSize
                         font.family: theme.chatFontFamily
-                        onTextChanged: linkTimer.restart()
+                        onTextChanged: {
+                            linkTimer.restart()
+                            view.updateSlashMatches()
+                        }
 
                         background: Rectangle {
                             radius: 16
@@ -420,6 +540,29 @@ Item {
                         }
 
                         Keys.onPressed: (event) => {
+                            if (view.slashMatches.length > 0) {
+                                if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) {
+                                    var step = event.key === Qt.Key_Down ? 1 : -1
+                                    slashList.currentIndex = (slashList.currentIndex + step + view.slashMatches.length) % view.slashMatches.length
+                                    event.accepted = true
+                                    return
+                                }
+                                if (event.key === Qt.Key_Tab || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                                    view.useCommand(view.slashMatches[Math.max(0, slashList.currentIndex)])
+                                    event.accepted = true
+                                    return
+                                }
+                                if (event.key === Qt.Key_Escape) {
+                                    view.slashMatches = []
+                                    event.accepted = true
+                                    return
+                                }
+                            }
+                            if (event.key === Qt.Key_Escape && app.streaming) {
+                                app.stop()
+                                event.accepted = true
+                                return
+                            }
                             if (event.key === Qt.Key_V
                                     && (event.modifiers & Qt.ControlModifier)
                                     && !(event.modifiers & Qt.ShiftModifier)
@@ -435,11 +578,7 @@ Item {
                                         : (event.modifiers & Qt.ControlModifier)
                                 if (shouldSend) {
                                     event.accepted = true
-                                    var text = input.text
-                                    if (text.trim().length > 0) {
-                                        input.text = ""
-                                        app.send(text)
-                                    }
+                                    view.sendInput()
                                 }
                             }
                         }
@@ -487,7 +626,6 @@ Item {
                     AppButton {
                         text: ""
                         icon.source: "qrc:/resources/icons/globe.svg"
-                        ghost: true
                         implicitWidth: 40
                         ToolTip.visible: hovered
                         ToolTip.text: "Pesquisar na web com fontes"
@@ -524,17 +662,18 @@ Item {
                     AppButton {
                         text: ""
                         icon.source: "qrc:/resources/icons/slash.svg"
-                        ghost: true
                         implicitWidth: 40
                         ToolTip.visible: hovered
-                        ToolTip.text: "Comandos rápidos"
+                        ToolTip.text: "Comandos rápidos (digite / no início da mensagem)"
                         onClicked: commandsMenu.popup()
                     }
 
                     Item { Layout.fillWidth: true }
 
                     AppButton {
-                        text: app.streaming ? "Parar" : "Enviar"
+                        text: view.width < 560 ? "" : (app.streaming ? "Parar" : "Enviar")
+                        ToolTip.visible: hovered && text.length === 0
+                        ToolTip.text: app.streaming ? "Parar (Esc)" : "Enviar"
                         icon.source: app.streaming
                                      ? "qrc:/resources/icons/stop.svg"
                                      : "qrc:/resources/icons/send.svg"
@@ -542,13 +681,10 @@ Item {
                         danger: app.streaming
                         enabled: app.streaming || input.text.trim().length > 0
                         onClicked: {
-                            if (app.streaming) {
+                            if (app.streaming)
                                 app.stop()
-                            } else {
-                                var text = input.text
-                                input.text = ""
-                                app.send(text)
-                            }
+                            else
+                                view.sendInput()
                         }
                     }
                 }
@@ -556,12 +692,14 @@ Item {
                     Layout.fillWidth: true
                     text: (app.enterToSend ? "Enter envia · Shift+Enter quebra linha"
                                             : "Ctrl+Enter envia · Enter quebra linha")
+                          + (app.streaming ? " · Esc para" : " · / comandos · Ctrl+K paleta")
                           + (input.text.trim().length > 0
                              ? " · " + app.estimateMessageCost(input.text) : "")
                     color: theme.muted
                     font.family: theme.fontFamily
                     font.pointSize: 9
                     horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
                 }
             }
 
@@ -586,11 +724,7 @@ Item {
             MenuItem {
                 required property var modelData
                 text: "/" + modelData.name
-                onTriggered: {
-                    input.text = modelData.prompt
-                    input.forceActiveFocus()
-                    app.logClientActivity("command_use", modelData.name)
-                }
+                onTriggered: view.useCommand(modelData)
             }
         }
     }
@@ -604,6 +738,12 @@ Item {
         }
 
         function onCurrentConversationChanged() {
+            var drafts = view.drafts
+            if (input.text.trim().length > 0) drafts[String(view.draftConversationId)] = input.text
+            else delete drafts[String(view.draftConversationId)]
+            view.drafts = drafts
+            view.draftConversationId = app.currentConversationId
+            input.text = drafts[String(app.currentConversationId)] || ""
             modelCombo.currentIndex = Math.max(0, modelCombo.model.indexOf(app.currentModel))
             effortCombo.currentIndex = Math.max(0, effortCombo.model.indexOf(app.currentEffort))
         }
@@ -614,6 +754,7 @@ Item {
     }
 
     Component.onCompleted: {
+        view.draftConversationId = app.currentConversationId
         modelCombo.currentIndex = Math.max(0, modelCombo.model.indexOf(app.currentModel))
         effortCombo.currentIndex = Math.max(0, effortCombo.model.indexOf(app.currentEffort))
     }

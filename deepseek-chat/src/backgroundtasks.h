@@ -10,8 +10,12 @@ struct BackgroundTask {
     QString command;
     QString workdir;
     QString status = QStringLiteral("Iniciando");
+    QString previewUrl;
     int exitCode = -1;
+    int revision = 0;
     bool stopped = false;
     QProcess *process = nullptr;
+    // Windows Job Object that owns the whole process tree (unused elsewhere).
+    void *job = nullptr;
     BoundedOutput output{200 * 1024, 100 * 1024};
 };
